@@ -34,16 +34,16 @@ pull_from_aliyun \
 
 echo "=== 2. vLLM (from Aliyun) ==="
 pull_from_aliyun \
-  "vllm-openai:v0.8.5" \
-  "vllm/vllm-openai:v0.8.5"
+  "vllm-openai:v0.23.0" \
+  "vllm/vllm-openai:v0.23.0"
 
 echo "=== 3. Agentgateway (from Aliyun) ==="
 pull_from_aliyun \
-  "agentgateway-controller:v1.1.0" \
-  "ghcr.io/agentgateway/controller:v1.1.0"
+  "agentgateway-controller:v1.3.1" \
+  "ghcr.io/agentgateway/controller:v1.3.1"
 pull_from_aliyun \
-  "agentgateway:v1.1.0" \
-  "ghcr.io/agentgateway/agentgateway:v1.1.0"
+  "agentgateway:v1.3.1" \
+  "ghcr.io/agentgateway/agentgateway:v1.3.1"
 
 echo ""
 echo "=== 镜像就绪 ==="
