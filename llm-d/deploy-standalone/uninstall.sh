@@ -26,10 +26,10 @@ helm uninstall "${GUIDE_NAME}" -n "${NAMESPACE}" 2>/dev/null || echo "  no helm 
 echo "=== 2. Delete namespace llm-d-standalone ==="
 kubectl delete namespace "${NAMESPACE}" --timeout=60s 2>/dev/null || echo "  no namespace: ${NAMESPACE}"
 
-echo "=== 3. Helm uninstall llm-d (modelservice + redis) ==="
+echo "=== 3. Helm uninstall llm-d (modelservice + redis) === standalone not this"
 helm uninstall llm-d -n llm-d 2>/dev/null || echo "  no helm release: llm-d"
 
-echo "=== 4. Delete namespace llm-d ==="
+echo "=== 4. Delete namespace llm-d === standalone not this"
 kubectl delete namespace llm-d --timeout=60s 2>/dev/null || echo "  no namespace: llm-d"
 
 echo "=== 5. Delete GIE CRDs ==="
