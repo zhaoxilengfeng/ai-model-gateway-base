@@ -14,7 +14,7 @@
 set -e
 
 NAMESPACE="${NAMESPACE:-llm-d-standalone}"
-VLLM_IMAGE="${VLLM_IMAGE:-vllm/vllm-openai:v0.8.5}"
+VLLM_IMAGE="${VLLM_IMAGE:-vllm/vllm-openai:v0.23.0}"
 REPLICAS="${REPLICAS:-1}"
 REPO_ROOT="${REPO_ROOT:-/root/llm-d}"
 MODEL_CACHE="${MODEL_CACHE:-/root/models}"
@@ -76,7 +76,6 @@ spec:
         - "--max-model-len=8192"
         - "--gpu-memory-utilization=0.85"
         - "--enable-prefix-caching"
-        - "--disable-access-log-for-endpoints=/health,/metrics,/v1/models"
         env:
         - name: HF_HUB_OFFLINE
           value: "1"

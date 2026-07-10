@@ -20,13 +20,19 @@ fi
 
 echo "=== 全量卸载 llm-d standalone ==="
 
-echo "=== 1. Helm uninstall router ==="
+echo "=== 1. Helm uninstall router (llm-d-standalone) ==="
 helm uninstall "${GUIDE_NAME}" -n "${NAMESPACE}" 2>/dev/null || echo "  no helm release: ${GUIDE_NAME}"
 
-echo "=== 2. Delete namespace ==="
+echo "=== 2. Delete namespace llm-d-standalone ==="
 kubectl delete namespace "${NAMESPACE}" --timeout=60s 2>/dev/null || echo "  no namespace: ${NAMESPACE}"
 
-echo "=== 3. Delete GIE CRDs ==="
+echo "=== 3. Helm uninstall llm-d (modelservice + redis) ==="
+helm uninstall llm-d -n llm-d 2>/dev/null || echo "  no helm release: llm-d"
+
+echo "=== 4. Delete namespace llm-d ==="
+kubectl delete namespace llm-d --timeout=60s 2>/dev/null || echo "  no namespace: llm-d"
+
+echo "=== 5. Delete GIE CRDs ==="
 kubectl delete crd inferencepools.inference.networking.k8s.io --ignore-not-found 2>/dev/null || true
 kubectl delete crd inferencemodels.inference.networking.k8s.io --ignore-not-found 2>/dev/null || true
 

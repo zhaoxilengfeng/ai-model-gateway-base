@@ -5,7 +5,7 @@
 set -e
 
 NAMESPACE="${NAMESPACE:-llm-d-gateway}"
-VLLM_IMAGE="${VLLM_IMAGE:-vllm/vllm-openai:v0.8.5}"
+VLLM_IMAGE="${VLLM_IMAGE:-vllm/vllm-openai:v0.23.0}"
 REPLICAS="${REPLICAS:-1}"
 MODEL_CACHE="${MODEL_CACHE:-/root/models}"
 GUIDE_NAME="${GUIDE_NAME:-quickstart}"

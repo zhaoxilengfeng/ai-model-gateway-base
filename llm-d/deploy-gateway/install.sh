@@ -23,36 +23,6 @@ echo "=== 1. Install GIE CRDs ==="
 kubectl apply --server-side -f "$GIE_YAML"
 
 echo "=== 2. Install Agentgateway ==="
-# K8s v1.27 不支持 CEL matches()，需去除相关 x-kubernetes-validations
-python3 - <<'PYEOF'
-import yaml, os, glob
-
-def remove_matches_rules(obj):
-    if isinstance(obj, dict):
-        if 'x-kubernetes-validations' in obj:
-            obj['x-kubernetes-validations'] = [
-                r for r in obj['x-kubernetes-validations']
-                if 'matches' not in r.get('rule', '')
-            ]
-            if not obj['x-kubernetes-validations']:
-                del obj['x-kubernetes-validations']
-        for v in obj.values():
-            remove_matches_rules(v)
-    elif isinstance(obj, list):
-        for item in obj:
-            remove_matches_rules(item)
-
-crd_dir = '/root/deploy/llm-d-gateway/agentgateway/agentgateway-crds/templates'
-if os.path.exists(crd_dir):
-    for path in glob.glob(f'{crd_dir}/*.yaml'):
-        with open(path) as f:
-            docs = list(yaml.safe_load_all(f))
-        for doc in docs:
-            if doc:
-                remove_matches_rules(doc)
-        with open(path, 'w') as f:
-            yaml.dump_all(docs, f, allow_unicode=True)
-PYEOF
 
 helm upgrade --install agentgateway "$AGW_CHART_DIR" \
   --namespace agentgateway-system --create-namespace \
