@@ -2,6 +2,16 @@
 
 基于官方 [optimized-baseline](https://github.com/llm-d/llm-d/tree/v0.8.1/guides/optimized-baseline) 指南，使用 `llm-d-router-standalone` chart。
 
+## 当前部署状态
+
+| Pod | 节点 | 状态 |
+|-----|------|------|
+| quickstart-epp | host-000-004 | 2/2 Running |
+| qwen25-7b-instruct | host-000-005 | 1/1 Running |
+
+> 注：模型 pod 当前通过 nodeAffinity 限制在 host-000-004/005（驱动 580），
+> host-000-002 驱动升级重启完成后可移除该限制并 uncordon。
+
 ## 架构
 
 ```
