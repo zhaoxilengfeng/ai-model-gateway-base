@@ -1,0 +1,16 @@
+treatments:
+  - name: rate1
+    load.stages.0.rate: 1
+    load.stages.0.duration: 60
+  - name: rate4
+    load.stages.0.rate: 4
+    load.stages.0.duration: 60
+  - name: rate8
+    load.stages.0.rate: 8
+    load.stages.0.duration: 60
+  - name: rate16
+    load.stages.0.rate: 16
+    load.stages.0.duration: 60
+  - name: rate32
+    load.stages.0.rate: 32
+    load.stages.0.duration: 60

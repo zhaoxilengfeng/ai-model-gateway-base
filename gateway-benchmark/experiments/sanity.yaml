@@ -1,0 +1,4 @@
+treatments:
+  - name: sanity
+    load.stages.0.rate: 1
+    load.stages.0.duration: 30

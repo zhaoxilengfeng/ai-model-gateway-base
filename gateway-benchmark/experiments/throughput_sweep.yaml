@@ -1,0 +1,13 @@
+treatments:
+  - name: qlen256-olen256
+    data.shared_prefix.question_len: 256
+    data.shared_prefix.output_len: 256
+  - name: qlen1024-olen256
+    data.shared_prefix.question_len: 1024
+    data.shared_prefix.output_len: 256
+  - name: qlen256-olen1024
+    data.shared_prefix.question_len: 256
+    data.shared_prefix.output_len: 1024
+  - name: qlen1024-olen1024
+    data.shared_prefix.question_len: 1024
+    data.shared_prefix.output_len: 1024
