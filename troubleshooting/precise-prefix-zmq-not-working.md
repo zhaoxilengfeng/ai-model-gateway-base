@@ -2,13 +2,22 @@
 
 ## 问题现象
 
-部署 `deploy-precise-prefix` 后，EPP 日志中每次请求都报：
+部署 `deploy-precise-prefix` 后，每次推理请求都被路由但精准前缀评分不生效。
+
+通过以下命令查看 EPP 日志可以发现：
+
+```bash
+EPP_POD=$(kubectl get pods -n llm-d-precise-prefix | grep epp | grep Running | head -1 | awk '{print $1}')
+kubectl logs $EPP_POD -n llm-d-precise-prefix -c epp | grep "PrefixCacheMatchInfo"
+```
+
+输出：
 
 ```
 PrefixCacheMatchInfo not found for endpoint, assigning score 0
 ```
 
-精准前缀路由不生效，退化为其他 scorer（queue、kv-util）做决策。
+说明 prefix-cache-scorer 无法获取 KV 块索引，每次都打 0 分，精准前缀路由退化为其他 scorer（queue、kv-util）做决策。
 
 ## 排查过程
 

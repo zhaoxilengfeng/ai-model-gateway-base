@@ -5,12 +5,15 @@
 #   1. 启用 --kv-events-config：vLLM 通过 ZMQ TCP :5556 发布 KV 块事件
 #   2. --block-size=64 必须与 EPP precise-prefix-cache-producer blockSize 一致
 #   3. 暴露 containerPort 5556（kv-events），EPP 通过 pod-discovery 订阅每个 pod
+#
+# 注意：精准前缀路由在多副本下才有意义（EPP 根据各 pod 的 KV 索引选择命中率最高的）
+#       建议 REPLICAS >= 2，每个 GPU 节点各跑一个
 set -e
 
 NAMESPACE="${NAMESPACE:-llm-d-precise-prefix}"
 GUIDE_NAME="${GUIDE_NAME:-precise-prefix-cache-routing}"
 VLLM_IMAGE="${VLLM_IMAGE:-vllm/vllm-openai:v0.23.0}"
-REPLICAS="${REPLICAS:-1}"
+REPLICAS="${REPLICAS:-2}"
 MODEL_CACHE="${MODEL_CACHE:-/root/models}"
 
 MODEL_NAME="${1:-qwen25-7b-instruct}"
