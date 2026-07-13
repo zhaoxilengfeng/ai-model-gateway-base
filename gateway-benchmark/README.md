@@ -112,6 +112,7 @@ aibrix:
   --workload      profiles/<harness>/ 下的文件名，可不带 .in 后缀
   --experiment    experiments/ 下的文件名，不传则使用 profile 内置阶梯
   --parallelism   并行 harness pod 数（默认 1）
+  --proxy         启用代理，如 socks5h://127.0.0.1:1080（默认不使用）
   --spec          llmdbenchmark --spec 参数（默认 gpu）
   --dry-run       只打印命令，不执行
 ```

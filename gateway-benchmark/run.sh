@@ -8,6 +8,7 @@
 #   --workload   profiles/<harness>/ 下的文件名，不含 .in 后缀（默认读 config.yaml）
 #   --experiment experiments/ 下的文件名（可选，不传则用 profile 内置阶梯）
 #   --parallelism 并行 harness pod 数（默认 1）
+#   --proxy      启用代理，如 socks5h://127.0.0.1:1080（默认不使用）
 #   --dry-run    仅打印命令，不实际执行
 #   --spec       llmdbenchmark --spec 参数（默认 gpu）
 
@@ -46,6 +47,7 @@ HARNESS=""
 WORKLOAD=""
 EXPERIMENT=""
 PARALLELISM=""
+PROXY=""
 DRY_RUN=false
 SPEC="gpu"
 EXTRA_ARGS=()
@@ -57,6 +59,7 @@ while [[ $# -gt 0 ]]; do
         --workload)   WORKLOAD="$2";     shift 2 ;;
         --experiment) EXPERIMENT="$2";   shift 2 ;;
         --parallelism) PARALLELISM="$2"; shift 2 ;;
+        --proxy)      PROXY="$2";        shift 2 ;;
         --spec)       SPEC="$2";         shift 2 ;;
         --dry-run)    DRY_RUN=true;      shift ;;
         *)            EXTRA_ARGS+=("$1"); shift ;;
@@ -143,6 +146,7 @@ echo "  Harness:    $HARNESS"
 echo "  Workload:   $WORKLOAD"
 echo "  Experiment: ${EXPERIMENT:-（无，使用 profile 内置阶梯）}"
 echo "  Parallelism: $PARALLELISM"
+echo "  Proxy:      ${PROXY:-（未启用）}"
 echo "  结果目录:   $WORKSPACE"
 echo "=========================================="
 echo ""
@@ -152,6 +156,11 @@ echo ""
 if $DRY_RUN; then
     echo "[DRY-RUN] 未执行，退出。"
     exit 0
+fi
+
+if [[ -n "$PROXY" ]]; then
+    export https_proxy="$PROXY"
+    export http_proxy="$PROXY"
 fi
 
 "${CMD[@]}"
