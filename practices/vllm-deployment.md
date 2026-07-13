@@ -167,5 +167,5 @@ resources:
 | `Error 804: forward compatibility` | 驱动版本 < 580 | 升级驱动到 580+ |
 | pod 启动超时 | startupProbe failureThreshold 太小 | 增大到 40+ |
 | KV cache 命中率低 | `--enable-prefix-caching` 未开启 | 加上该参数 |
-| 精准路由 score 0 | EPP 先于 vLLM 启动 | 重启 EPP |
+| 精准路由 score 0 | pod 重启后 EPP ZMQ 断开 | 重启 EPP |
 | ZMQ 事件不通 | `--block-size` 与 EPP 不一致 | 统一为 64 |

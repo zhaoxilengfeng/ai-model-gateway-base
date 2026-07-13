@@ -20,8 +20,8 @@
 #   bash verify-precise-prefix.sh -p "自定义长前缀..."   # 自定义 prompt
 #   bash verify-precise-prefix.sh -n my-ns -m my-model  # 自定义 namespace 和模型
 #
-# 注意：EPP 必须在 vLLM pod 之后启动，pod-discovery 才能正确建立 ZMQ 订阅。
-# 若 vLLM pod 重启后精准路由失效，执行：
+# 注意：扩容新 pod 时 EPP 会自动发现并建立 ZMQ 订阅，无需重启。
+# 仅 pod 重启导致 IP 变化时需要重启 EPP：
 #   kubectl rollout restart deployment/<guide-name>-epp -n <namespace>
 
 # ── 参数解析 ──────────────────────────────────────────────────────────────────

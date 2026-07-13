@@ -213,13 +213,17 @@ curl ${GATEWAY}/v1/chat/completions \
 
 每个 InferencePool 只能绑定一个 EPP Service。两个 pool 需要部署两个独立的 EPP Deployment + Service。
 
-### 精准前缀路由 EPP 的启动顺序
+### 精准前缀路由 EPP 的 ZMQ 自动发现
 
-精准前缀路由 EPP 必须在 vLLM pod 之后启动，否则 pod-discovery 无法建立 ZMQ 订阅。vLLM pod 重启后也需要重启 EPP：
+EPP 通过 K8s informer 持续监听 pod 事件，**扩容新 pod 无需重启 EPP**，EPP 收到 ADD 事件后自动建立 ZMQ 订阅。
+
+只有 **pod 重启导致 IP 变化**（rollout restart / crash / 驱逐）时，EPP 的 ZMQ 连接会断开，此时需要重启 EPP：
 
 ```bash
 kubectl rollout restart deployment/precise-prefix-epp -n llm-d-gateway
 ```
+
+详见 [epp-zmq-pod-discovery.md](epp-zmq-pod-discovery.md)。
 
 ### render service 仅精准前缀路由需要
 
