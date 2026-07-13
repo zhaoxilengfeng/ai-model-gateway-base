@@ -119,7 +119,7 @@ EPP_IP=$(kubectl get svc "${GUIDE_NAME}-epp" -n "${NAMESPACE}" \
 if [ -z "$EPP_IP" ]; then
   fail "找不到 svc/${GUIDE_NAME}-epp"
 else
-  # 采集各 pod 基准值
+  # 采集各 pod 基准值（用 request_success_total 统计 HTTP 请求数，每条请求 +1）
   declare -A Q_BEFORE H_BEFORE POD_NODE
   VLLM_PODS=$(kubectl get pod -n "${NAMESPACE}" -l "llm-d.ai/model=${MODEL}" \
     -o jsonpath='{range .items[*]}{.metadata.name},{.status.podIP},{.spec.nodeName} {end}' 2>/dev/null)
@@ -130,10 +130,10 @@ else
     pnode=$(echo $entry | cut -d, -f3)
     POD_NODE[$pip]="${pnode}"
     Q_BEFORE[$pip]=$(curl -sf --max-time 3 "http://${pip}:8000/metrics" 2>/dev/null \
-      | grep "^vllm:prefix_cache_queries_total{" | awk '{print $2+0}')
+      | grep "^vllm:request_success_total{" | awk '{sum+=$2} END{print sum+0}')
     H_BEFORE[$pip]=$(curl -sf --max-time 3 "http://${pip}:8000/metrics" 2>/dev/null \
       | grep "^vllm:prefix_cache_hits_total{" | awk '{print $2+0}')
-    info "基准 ${pnode}(${pip}): queries=${Q_BEFORE[$pip]} hits=${H_BEFORE[$pip]}"
+    info "基准 ${pnode}(${pip}): http_requests=${Q_BEFORE[$pip]} prefix_hits=${H_BEFORE[$pip]}"
   done
 
   # 先发一次请求建立初始 KV cache
@@ -166,7 +166,7 @@ else
   for entry in $VLLM_PODS; do
     pip=$(echo $entry | cut -d, -f2)
     Q_AFTER[$pip]=$(curl -sf --max-time 3 "http://${pip}:8000/metrics" 2>/dev/null \
-      | grep "^vllm:prefix_cache_queries_total{" | awk '{print $2+0}')
+      | grep "^vllm:request_success_total{" | awk '{sum+=$2} END{print sum+0}')
     H_AFTER[$pip]=$(curl -sf --max-time 3 "http://${pip}:8000/metrics" 2>/dev/null \
       | grep "^vllm:prefix_cache_hits_total{" | awk '{print $2+0}')
     Q_DELTA[$pip]=$(echo "${Q_AFTER[$pip]} ${Q_BEFORE[$pip]}" | awk '{print $1-$2}')
@@ -179,18 +179,13 @@ else
   done
 
   echo ""
-  info "请求分布结果："
+  info "请求分布结果（基于 HTTP 请求数，每条请求计 1）："
   for entry in $VLLM_PODS; do
     pip=$(echo $entry | cut -d, -f2)
     qd=${Q_DELTA[$pip]%.*}
     hd=${H_DELTA[$pip]%.*}
     node=${POD_NODE[$pip]}
-    if [ "$qd" -gt 0 ]; then
-      hit_pct=$(echo "$hd $qd" | awk '{printf "%.1f", $1/$2*100}')
-      info "  ${node}(${pip}): 新增 ${qd} 条，命中 ${hd} 条（命中率 ${hit_pct}%）"
-    else
-      info "  ${node}(${pip}): 新增 0 条"
-    fi
+    info "  ${node}(${pip}): 新增 ${qd} 条 HTTP 请求"
   done
 
   echo ""
