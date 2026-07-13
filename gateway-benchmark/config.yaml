@@ -2,7 +2,7 @@
 # 使用前请填写各网关的 endpoint_url、model、namespace
 
 llmd:
-  endpoint_url: "http://10.109.41.89:80"       # llm-d precise-prefix EPP ClusterIP
+  endpoint_url: "http://10.108.111.132:80"      # llm-d precise-prefix EPP ClusterIP
   model: "qwen25-7b-instruct"                   # vLLM --served-model-name
   namespace: "llm-d-precise-prefix"             # harness pod 所在 namespace
 
