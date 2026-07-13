@@ -20,15 +20,16 @@
      │
      ▼
 ② precise-prefix-cache-producer
-   按 block_size=64 切分 token_ids
-   block_0: token_ids[0:64]   ──SHA256──► hash_A
-   block_1: token_ids[64:128] ──SHA256──► hash_B
+   按 block_size=64 切分 token_ids，链式计算 block hash
+   block_0: SHA256(token_ids[0:64])            → hash_A
+   block_1: SHA256(hash_A + token_ids[64:128]) → hash_B  ← 含父 hash
    ...
      │
-     ▼ 查倒排索引
+     ▼ 查两层 LRU 索引
 ③ prefix-cache-scorer
-   hash_A → {pod_A: 命中3块, pod_B: 命中0块}
-   计算各 pod 的前缀命中分数（0.0 ~ 1.0）
+   找每个 pod 已缓存的最长连续前缀块数
+   Pod A: B0✓ B1✓ B2✓ B3✗ → 命中 3 块
+   Pod B: B0✓ B1✗ --- --- → 命中 1 块（B1 断链，后续不计）
      │
      ▼
 ④ 加权评分（多维）
@@ -70,130 +71,231 @@ curl http://10.101.160.128:8000/v1/completions/render \
 
 ---
 
-## 第二步：按 block_size=64 切分并计算哈希
+## 第二步：切分 token 块并计算链式哈希
 
-`precise-prefix-cache-producer` 将 token_ids 序列按 64 个为一组切分，对每组计算 **SHA256** 哈希作为 block key。
+`precise-prefix-cache-producer` 将 token_ids 序列按 64 个为一组切分，对每组计算哈希作为 block key。
+
+### 链式哈希（非简单 SHA256）
+
+block hash **不是**单纯对 token_ids 做 SHA256，而是**链式计算**——每个块的 hash 包含父块的 hash：
 
 ```
-token_ids = [112720, 100700, 104136, ...]  (28 tokens)
-
-block_0 = token_ids[0:64]     → SHA256 → 0x7f3a8b...  (不满64，作为最后一个块)
-block_1 = token_ids[64:128]   → SHA256 → 0x2c91d4...  (如果 prompt 更长)
+block_0_hash = SHA256(token_ids[0:64])
+block_1_hash = SHA256(parent=block_0_hash  ‖  token_ids[64:128])
+block_2_hash = SHA256(parent=block_1_hash  ‖  token_ids[128:192])
 ...
 ```
 
-**block_size=64 是关键参数**，必须与 vLLM 启动参数 `--block-size=64` 完全一致：
+**为什么是链式**：KV cache 具有因果依赖性，block_1 的 attention 计算依赖于 block_0 的 KV 状态，因此 block_1 的 hash 必须包含 block_0 的内容。这样设计确保：
+- 相同 block_1 内容但 block_0 不同的两个请求，产生不同的 block_1_hash，不会误命中
+- 前缀完全相同的两个请求，产生完全相同的 block hash 链，可以精准命中
+
+**block_size=64 必须与 vLLM 一致**，vLLM 实际启动日志（实测）：
 
 ```
-# vLLM 实际启动日志（实测）
 kv_events_config: KVEventsConfig(
   enable_kv_cache_events=True,
   publisher='zmq',
   endpoint='tcp://*:5556',
   topic='kv@10.244.142.250:8000@qwen25-7b-instruct',
-  block_size=64     ← 与 EPP blockSize=64 一致
+  block_size=64     ← 与 EPP tokenProcessorConfig.blockSize=64 一致
 )
 Starting ZMQ publisher thread
 ```
-
-不一致会导致 EPP 计算的哈希与 vLLM 内部缓存的哈希不匹配，精准路由失效。
 
 ---
 
 ## 第三步：vLLM 发布 KV 块事件（ZMQ）
 
-每当 vLLM 完成一个请求的 prefill 阶段，它会通过 ZMQ PUB socket（`:5556`）发布 KV 块事件，通知 EPP 哪些 block hash 现在已经缓存在这个 pod 上。
+每当 vLLM 完成一个请求的 prefill 阶段，它会通过 ZMQ PUB socket（`:5556`）向 EPP 发布 KV 块事件。
+
+### 三种事件类型
+
+| 事件 | 触发时机 | EPP 行为 |
+|---|---|---|
+| `BlockStored` | prefill 完成，KV 块写入 cache | 将 block_hash → pod 写入索引 |
+| `BlockRemoved` | KV 块因内存压力被 LRU 驱逐 | 从索引中删除该 pod 对此 hash 的记录 |
+| `AllBlocksCleared` | pod 整体 cache 清空（如 RL 权重热更新）| 清除该 pod 在索引中的所有记录 |
 
 ### ZMQ 消息格式（实测抓包）
 
 ```
-frame[0]: topic  = b"kv@10.244.142.250:8000@qwen25-7b-instruct"
-frame[1]: seq_no = <uint64 little-endian>
+frame[0]: topic   = b"kv@10.244.142.250:8000@qwen25-7b-instruct"
+frame[1]: seq_no  = <uint64 little-endian，单调递增>
 frame[2]: payload = msgpack({
   "event_type": "BlockStored",
-  "block_hash": <bytes>,
-  "slot": <int>,
+  "block_hash":  <bytes，链式哈希值>,
+  "parent_hash": <bytes，父块哈希>,
+  "token_ids":   <list[int]，该块的 token 序列>,
+  "slot":        <int，在 vLLM KV cache 中的物理位置>,
   ...
 })
 ```
 
-topic 格式：`kv@<pod_ip>:<port>@<model_name>`
+topic 格式 `kv@<pod_ip>:<port>@<model_name>` 让 EPP 通过 topic 直接识别是哪个 pod 的事件，无需解包 payload。
 
-EPP 配置的 `topicFilter: "kv@"` 匹配所有以 `kv@` 开头的 topic，通过 pod IP 识别是哪个 pod 发来的事件。
-
-### vLLM 端的启动日志确认（实测）
+### vLLM 端确认（实测）
 
 ```
-# pod: qwen25-7b-instruct-...-4cps4 (host-000-002, IP: 10.244.142.250)
-KVEventsConfig(topic='kv@10.244.142.250:8000@qwen25-7b-instruct')
-Starting ZMQ publisher thread
+pod: qwen25-7b-instruct-...-4cps4 (host-000-002, 10.244.142.250)
+  KVEventsConfig(topic='kv@10.244.142.250:8000@qwen25-7b-instruct')
+  Starting ZMQ publisher thread  ← 每个 pod 各自的 PUB socket
 
-# pod: qwen25-7b-instruct-...-stx52 (host-000-005, IP: 10.244.41.130)  
-KVEventsConfig(topic='kv@10.244.41.130:8000@qwen25-7b-instruct')
-Starting ZMQ publisher thread
+pod: qwen25-7b-instruct-...-stx52 (host-000-005, 10.244.41.130)
+  KVEventsConfig(topic='kv@10.244.41.130:8000@qwen25-7b-instruct')
+  Starting ZMQ publisher thread
 ```
-
-每个 vLLM pod 各自绑定一个 ZMQ PUB socket，EPP 的每个副本分别订阅所有 pod 的 socket。
 
 ---
 
-## 第四步：EPP 订阅 ZMQ 并建立倒排索引
+## 第四步：EPP 建立 KV 块索引
 
-EPP 的 `precise-prefix-cache-producer` 订阅所有 vLLM pod 的 ZMQ PUB socket，收到 `BlockStored` 事件后更新内部的倒排索引：
+### 索引的数据结构
+
+EPP 内部维护一个**两层 LRU 内存索引**（来自官方设计文档）：
 
 ```
-倒排索引结构：
-  key:   block_hash（SHA256）
-  value: {pod_ip → 该 pod 缓存此 block 的记录}
+外层 LRU（按 block_hash 查询）：
+  key:   block_hash（链式 SHA256）
+  value: 内层 LRU
 
-示例（处理若干请求后）：
-  0x7f3a8b... → {10.244.142.250: 已缓存, 10.244.41.130: 未缓存}
-  0x2c91d4... → {10.244.142.250: 已缓存, 10.244.41.130: 已缓存}
+内层 LRU（按 pod 查询）：
+  key:   pod_ip
+  value: {tier: "gpu"/"cpu", timestamp, ...}
+
+默认容量：最多 1 亿个 block_hash × 10 个 pod 条目
+内存占用：约 几十 GB（per EPP 副本）
 ```
 
-EPP 日志中的 ZMQ 连接（实测）：
+示例（处理若干请求后的索引状态）：
 
+```
+block_hash_A → { 10.244.142.250: {tier: gpu, ts: T1},
+                  10.244.41.130:  <未缓存> }
+
+block_hash_B → { 10.244.142.250: {tier: gpu, ts: T1},
+                  10.244.41.130:  {tier: gpu, ts: T2} }
+
+block_hash_C → { 10.244.41.130:  {tier: gpu, ts: T3} }
+```
+
+### 索引的动态维护
+
+EPP 实时处理三种事件对索引的影响：
+
+```
+BlockStored  → index[hash][pod]  = {tier, ts}     (写入)
+BlockRemoved → index[hash].pop(pod)                (删除)
+AllBlocksCleared → for hash in index: index[hash].pop(pod)  (清除该 pod 所有记录)
+```
+
+LRU 在内存压力下自动淘汰最旧的条目，整个过程对路由透明（被淘汰的条目相当于 cache miss，降级为负载感知路由）。
+
+### 两种 ZMQ 连接模式
+
+当前使用 **pod-discovery 模式**（`discoverPods: true`）：EPP 通过 K8s label selector 发现所有 vLLM pod，主动向每个 pod 建立 SUB 连接。适用于 EPP 多副本 HA——每个副本独立订阅完整事件流，各自维护相同的索引。
+
+```
+EPP Replica 1 ──ZMQ SUB──► vLLM Pod A :5556
+EPP Replica 1 ──ZMQ SUB──► vLLM Pod B :5556
+
+EPP Replica 2 ──ZMQ SUB──► vLLM Pod A :5556
+EPP Replica 2 ──ZMQ SUB──► vLLM Pod B :5556
+```
+
+两个副本的索引独立但内容相同，任一副本故障，另一个继续精准路由。
+
+EPP 日志中的连接记录（实测）：
 ```
 Connected subscriber socket  endpoint=tcp://10.244.142.250:5556
 Connected subscriber socket  endpoint=tcp://10.244.41.130:5556
 ```
 
-### pod-discovery 机制
+### pod-discovery 对扩缩容的影响
 
-EPP 通过 K8s pod reconciler 动态维护订阅列表：
-
-| 事件 | EPP 行为 |
-|---|---|
-| `kubectl scale` 新增 pod（ADD）| 自动建立新 pod 的 ZMQ 订阅 |
-| `kubectl delete pod`（DELETE+ADD）| 自动重连新 IP |
-| `kubectl rollout restart`（UPDATE）| ZMQ 断开，需手动重启 EPP |
+| 操作 | K8s 事件 | EPP 行为 |
+|---|---|---|
+| `kubectl scale` 扩容 | ADD | 自动发现新 pod，自动建立 ZMQ 订阅 |
+| `kubectl delete pod`（Deployment 重建）| DELETE + ADD | 旧连接清理，新 pod ADD 时自动重建 |
+| `kubectl rollout restart` | UPDATE（同 name，IP 变）| ZMQ 断开，需手动重启 EPP |
 
 ---
 
 ## 第五步：请求到来时的路由决策
 
-当新请求到达时，EPP 执行以下评分：
+### 连续前缀匹配原则（关键）
 
-### prefix-cache-scorer 计算
+KV cache 具有因果依赖性——**只有缓存了完整的连续前缀，后续块才能被复用**，中间断链的块无法使用。
+
+```
+请求的 block 序列：[B0, B1, B2, B3, B4]
+
+Pod A: B0✓  B1✓  B2✓  B3✓  B4✗  → 命中长度 = 4（连续到 B3）
+Pod B: B0✓  B1✓  B2✗  ---  ---  → 命中长度 = 2（B2 断链，B3/B4 不计）
+Pod C: B0✗  ---  ---  ---  ---  → 命中长度 = 0
+
+注意：Pod C 即使碰巧缓存了 B3 和 B4，命中长度仍为 0，
+      因为 attention 计算必须从 B0 开始连续进行。
+```
+
+### 分层缓存权重
+
+当 KV 块缓存在不同内存层时，命中权重不同：
+
+| 缓存层 | 权重 | 说明 |
+|---|---|---|
+| GPU HBM | 1.0 | 直接复用，无搬运开销 |
+| CPU 内存 | 0.8 | 需搬运到 GPU，但仍比重新计算快 |
+
+同一块在多层都有缓存时取最大权重（GPU 优先）。
+
+### prefix-cache-scorer 计算逻辑
 
 ```python
-# 伪代码：EPP 内部 prefix 评分逻辑
+# 伪代码（基于官方设计文档）
 for pod in candidate_pods:
-    matched_blocks = 0
-    total_blocks = len(request_blocks)
-    for block_hash in request_blocks:
+    score = 0.0
+    for i, block_hash in enumerate(request_blocks):
         if block_hash in index and pod in index[block_hash]:
-            matched_blocks += 1
-    prefix_score[pod] = matched_blocks / total_blocks  # 0.0 ~ 1.0
+            tier = index[block_hash][pod].tier
+            score += tier_weight[tier]   # gpu=1.0, cpu=0.8
+        else:
+            break   # 链断，后续块不计
+    # 归一化到 [0.0, 1.0]
+    prefix_score[pod] = score / len(request_blocks)
 ```
+
+### 推测索引（Speculative Indexing）
+
+**问题**：`BlockStored` 事件在 prefill 完成后通过 ZMQ 异步发送，有毫秒级延迟。若第二个相同前缀的请求在事件到达前就进入 EPP，索引还没有更新，路由会随机分配，破坏前缀亲和性。
+
+**解决方案**：`speculativeIndexing: true`（当前配置已启用）
+
+路由决策完成后，EPP 立即在索引中预写"推测条目"，TTL 默认 2 秒：
+
+```
+第1次请求 → 路由到 Pod A
+  └── 推测索引写入（TTL 2s）：
+        block_hash_A → Pod A（predicted）
+        block_hash_B → Pod A（predicted）
+
+第2次请求（50ms 后，BlockStored 尚未到达）
+  └── 查推测索引：命中 Pod A
+  └── 路由到 Pod A  ← 正确！保持了前缀亲和性
+
+BlockStored 事件到达（200ms 后）
+  └── 正式索引覆盖推测索引（confirmed）
+```
+
+TTL 2 秒设计目的：足够覆盖典型的 routing-to-event 延迟（< 500ms），同时不会让失败的预测条目长期污染索引。
 
 ### 多维加权最终评分
 
 ```
-final_score = prefix_score     × 3.0   # 精准前缀命中（权重最高）
-            + kv_util_score    × 2.0   # KV cache 利用率
-            + queue_score      × 2.0   # 请求队列深度
-            + no_hit_lru_score × 2.0   # 无命中时 LRU 策略
+final_score = prefix_score     × 3.0   # 精准前缀命中（权重最高，决定路由倾向）
+            + kv_util_score    × 2.0   # KV cache 利用率低 → 高分
+            + queue_score      × 2.0   # 请求队列短 → 高分
+            + no_hit_lru_score × 2.0   # 无命中时 LRU 均衡策略
 ```
 
 选出 `final_score` 最高的 pod，将其 IP 返回给 agentgateway proxy。
@@ -214,7 +316,7 @@ final_score = prefix_score     × 3.0   # 精准前缀命中（权重最高）
   最大集中度: 100%
 ```
 
-相同前缀的请求 100% 被路由到同一个 pod（有 KV cache），随机请求则近似均匀分布，差异达 **38 个百分点**，证明精准路由在驱动决策。
+相同前缀的请求 100% 被路由到同一 pod，随机请求近似均匀分布，差异 **38 个百分点**，证明精准路由在驱动决策。
 
 ---
 
@@ -224,9 +326,9 @@ final_score = prefix_score     × 3.0   # 精准前缀命中（权重最高）
 
 | 故障场景 | 影响 | 降级行为 |
 |---|---|---|
-| render service 挂掉 | token-producer 无法 tokenize | prefix-cache-scorer score=0，回退到 queue+kv-util 路由 |
+| render service 挂掉 | token-producer 无法 tokenize | prefix-cache-scorer score=0，回退到 queue+kv-util |
 | EPP ZMQ 断开（rollout restart）| 索引停止更新 | prefix-cache-scorer score=0，回退到负载感知路由 |
-| 单个 vLLM pod 不可达 | 该 pod 的 KV 事件停止 | 其他 pod 正常，EPP 只选可用 pod |
+| 单个 vLLM pod 不可达 | 该 pod KV 事件停止 | 其他 pod 正常，EPP 只选可用 pod |
 
 EPP 日志中的降级特征：
 
@@ -242,41 +344,37 @@ PrefixCacheMatchInfo not found for endpoint, assigning score 0
 
 ```
 render  --served-model-name=qwen25-7b-instruct
-             ↕
+             ↕ 必须一致
 EPP     token-producer.modelName=qwen25-7b-instruct
-             ↕
+             ↕ 必须一致
 vLLM    --served-model-name=qwen25-7b-instruct
 ```
-
-任一不一致，render 返回 404，精准路由失效。
 
 ### block_size 必须一致
 
 ```
 vLLM   --block-size=64
-            ↕
+            ↕ 必须一致
 EPP    tokenProcessorConfig.blockSize=64
 ```
 
-不一致会导致哈希不匹配，索引建立但永远 score=0。
+不一致导致哈希不匹配，索引建立但永远 score=0（静默失效）。
 
 ### vLLM topic 格式必须包含真实 pod IP
 
 ```bash
-# deploy-model.sh 中的关键配置
 --kv-events-config '{"enable_kv_cache_events":true,"publisher":"zmq",
   "endpoint":"tcp://*:5556",
   "topic":"kv@$(POD_IP):8000@qwen25-7b-instruct"}'
 
-# 同时注入环境变量让 vLLM 可以展开 $(POD_IP)
 env:
 - name: POD_IP
   valueFrom:
     fieldRef:
-      fieldPath: status.podIP
+      fieldPath: status.podIP    # K8s downward API 注入真实 pod IP
 ```
 
-vLLM 在启动时会展开 `$(POD_IP)` 为实际 pod IP（实测确认），EPP 通过 topic 中的 IP 识别是哪个 pod 发来的事件。
+vLLM 启动时展开 `$(POD_IP)` 为实际 pod IP（实测确认）。
 
 ---
 
@@ -284,8 +382,9 @@ vLLM 在启动时会展开 `$(POD_IP)` 为实际 pod IP（实测确认），EPP 
 
 | 维度 | optimized-baseline | precise-prefix-cache-routing |
 |---|---|---|
-| 前缀缓存感知方式 | 启发式（基于历史调度统计估算）| 精准（基于实时 ZMQ KV 块事件）|
-| 路由精度 | 近似 | 精确到 block 级别 |
-| 额外组件 | 无 | ZMQ（vLLM 侧）+ render service + EPP 倒排索引 |
-| 适合场景 | 通用生产环境 | 高重复前缀（RAG、固定 system prompt、多轮对话）|
-| 启动开销 | 低 | 略高（需等 KV 事件积累后索引才有效）|
+| 前缀感知方式 | 启发式（字符/历史统计估算）| 精准（实时 ZMQ KV 块事件）|
+| 哈希计算 | 基于字符近似 | 基于真实 token_ids，链式 SHA256 |
+| 匹配规则 | 近似命中数 | 连续前缀最长匹配，中断即停 |
+| 缓存驱逐感知 | 不感知（可能路由到已驱逐 cache 的 pod）| 实时感知（BlockRemoved 事件更新索引）|
+| 额外组件 | 无 | render service + ZMQ + 两层 LRU 索引 |
+| 适合场景 | 通用生产环境 | RAG、固定 system prompt、多轮对话 |
