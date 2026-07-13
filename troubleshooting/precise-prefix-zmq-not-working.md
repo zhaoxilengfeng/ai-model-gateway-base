@@ -91,9 +91,14 @@ kubectl rollout restart deployment/precise-prefix-cache-routing-epp -n llm-d-pre
 
 ## 根本原因
 
-**EPP pod-discovery 的启动顺序依赖**：EPP 必须在 vLLM pod 之后启动（或重启），才能通过 `pod_reconciler` 正确感知 vLLM pod IP 并建立 ZMQ 订阅。
+**EPP pod-discovery 的两种场景行为不同**：
 
-这是 EPP v0.9.0 的已知行为限制：pod ADD 事件只在 pod 创建时触发一次，EPP 重启后会通过初始 List 获取存量 pod，但如果 vLLM pod 在 EPP 运行期间重启（IP 变化），EPP 检测到 "Pod already exists"（NamespacedName 相同）后会 shutdown 旧 IP 的 subscriber，却不用新 IP 重建，导致订阅断开。
+| 场景 | K8s 事件 | EPP 行为 |
+|---|---|---|
+| **扩容新 pod**（scale out）| ADD | ✅ 自动感知，自动建立 ZMQ 订阅，无需重启 EPP |
+| **pod 原地重启**（IP 变化，name 不变）| UPDATE | ❌ 检测到 "Pod already exists"，shutdown 旧 IP 的 subscriber，不用新 IP 重建 |
+
+扩容场景 EPP 可以自动处理，不需要重启。只有 **pod 重启导致 IP 变化** 才需要重启 EPP。
 
 ## 解决方案
 

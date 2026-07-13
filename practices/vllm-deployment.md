@@ -95,9 +95,15 @@ args:
 
 ### 精准前缀路由
 
-- **最少 2 个 pod**：单 pod 下 EPP 的路由选择无意义（只有一个候选），精准路由效果体现不出来
-- 每个 GPU 节点跑一个 pod，让不同 pod 的 KV cache 相互独立，EPP 才能做有意义的路由决策
-- pod 重启后必须重启 EPP（见 [troubleshooting](../troubleshooting/precise-prefix-zmq-not-working.md)）
+- **最少 2 个 pod**：单 pod 下路由选择无意义，精准路由效果体现不出来
+- 每个 GPU 节点跑一个 pod，不同 pod 的 KV cache 相互独立，EPP 才能做有意义的路由决策
+- **扩容新 pod 无需重启 EPP**：EPP 的 pod_reconciler 监听 K8s pod ADD 事件，新 pod Ready 后自动发现并建立 ZMQ 订阅
+- **以下情况需要重启 EPP**：pod 原地重启（NamespacedName 不变但 IP 变化），pod_reconciler 收到 UPDATE 事件但不会重建 ZMQ 连接
+
+```bash
+# pod 重启后（IP 变化），需手动重启 EPP
+kubectl rollout restart deployment/precise-prefix-cache-routing-epp -n llm-d-precise-prefix
+```
 
 ### 负载感知路由
 
