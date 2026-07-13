@@ -158,6 +158,53 @@ helm upgrade --install "${GUIDE_NAME}" "$ROUTER_CHART_DIR" \
   -n "${NAMESPACE}" \
   --set provider.name=agentgateway \
   --set httpRoute.inferenceGatewayName=llm-d-inference-gateway \
+  --set "router.epp.pluginsCustomConfig.precise-prefix-cache-routing-plugins\\.yaml=apiVersion: llm-d.ai/v1alpha1
+kind: EndpointPickerConfig
+plugins:
+  - type: token-producer
+    parameters:
+      modelName: ${SERVED_MODEL}
+      vllm:
+        url: \"http://${GUIDE_NAME}-render:8000\"
+  - type: endpoint-notification-source
+  - type: precise-prefix-cache-producer
+    parameters:
+      tokenProcessorConfig:
+        blockSize: 64
+      speculativeIndexing: true
+      indexerConfig:
+        kvBlockIndexConfig:
+          enableMetrics: true
+      kvEventsConfig:
+        topicFilter: \"kv@\"
+        concurrency: 8
+        discoverPods: true
+        podDiscoveryConfig:
+          socketPort: 5556
+  - type: prefix-cache-scorer
+    parameters:
+      prefixMatchInfoProducerName: precise-prefix-cache-producer
+  - type: kv-cache-utilization-scorer
+  - type: queue-scorer
+  - type: no-hit-lru-scorer
+    parameters:
+      prefixMatchInfoProducerName: precise-prefix-cache-producer
+dataLayer:
+  sources:
+    - pluginRef: endpoint-notification-source
+      extractors:
+        - pluginRef: precise-prefix-cache-producer
+schedulingProfiles:
+  - name: default
+    plugins:
+      - pluginRef: kv-cache-utilization-scorer
+        weight: 2.0
+      - pluginRef: queue-scorer
+        weight: 2.0
+      - pluginRef: prefix-cache-scorer
+        weight: 3.0
+      - pluginRef: no-hit-lru-scorer
+        weight: 2.0" \
   --wait --timeout=180s
 
 echo ""
