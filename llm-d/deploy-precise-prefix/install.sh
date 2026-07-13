@@ -78,6 +78,8 @@ spec:
         args:
         - "${RENDER_MODEL_PATH}"
         - "--port=8000"
+        # served-model-name 必须与 EPP token-producer.modelName 以及 vLLM --served-model-name 一致
+        - "--served-model-name=${SERVED_MODEL:-qwen25-7b-instruct}"
         ports:
         - name: render-http
           containerPort: 8000

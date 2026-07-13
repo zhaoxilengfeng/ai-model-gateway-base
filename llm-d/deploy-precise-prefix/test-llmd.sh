@@ -62,3 +62,7 @@ fi
 
 echo ""
 echo "=== 全部检查通过 ==="
+echo ""
+echo "下一步：运行性能基准测试"
+echo "  cd /root/ai-model-gateway-base/gateway-benchmark"
+echo "  ./run_llmd.sh --workload sanity.yaml --experiment sanity.yaml"

@@ -133,3 +133,25 @@ curl http://${EPP_IP}/v1/chat/completions \
 ```bash
 bash test-llmd.sh
 ```
+
+---
+
+## 性能基准测试
+
+部署完成后可使用 `gateway-benchmark` 对该网关进行推理性能测试：
+
+```bash
+cd /root/ai-model-gateway-base/gateway-benchmark
+
+# 快速验通（30s）
+./run_llmd.sh --workload sanity.yaml --experiment sanity.yaml
+
+# 阶梯并发压测（1→4→8→16→32 QPS）
+./run_llmd.sh --workload sweep_chatbot.yaml --experiment concurrency_sweep.yaml
+
+# 前缀缓存场景（测 KV cache 命中率，适合 precise-prefix 模式）
+./run_llmd.sh --workload sweep_shared_prefix.yaml --experiment throughput_sweep.yaml
+```
+
+`config.yaml` 中 `llmd` 部分已预填该部署的 EPP endpoint 和模型名，无需额外配置。
+详见 [gateway-benchmark/README.md](../../gateway-benchmark/README.md)。
