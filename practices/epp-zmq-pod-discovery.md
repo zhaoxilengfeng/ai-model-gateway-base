@@ -6,9 +6,11 @@
 |---|---|---|---|
 | `kubectl scale` 扩容新 pod | ADD | 自动发现，自动建立 ZMQ 订阅 | ❌ 不需要 |
 | `kubectl delete pod`（Deployment 重建）| DELETE + ADD | 旧连接断开；新 pod ADD 时自动重建 | ❌ 不需要 |
-| `kubectl rollout restart`（滚动替换）| UPDATE（name 同，IP 变）| 视时序而定，可能不重建 | ⚠️ 若 score 0 持续则需要 |
+| `kubectl rollout restart`（滚动替换）| UPDATE → DELETE + ADD | Connected 后立刻 shutting down，ZMQ 全部断开 | ✅ 需要 |
 | 节点故障，pod 漂移 | DELETE + ADD | 同 delete pod，自动恢复 | ❌ 不需要 |
 | EPP 先于 vLLM 启动 | 启动时 List 存量 pod | 正常，自动连接 | ❌ 不需要 |
+
+> `rollout restart` 与 `delete pod` 的区别：前者触发 UPDATE 事件（pod name 变、template hash 变），后者触发 DELETE+ADD 事件。EPP 对 UPDATE 的处理逻辑会导致 `shutting down` 后不重建连接。
 
 ---
 
@@ -68,21 +70,26 @@ Connected subscriber socket  endpoint=tcp://10.244.142.240:5556
 
 **实测**：删除 pod 后，新 pod Ready，EPP 自动重连，无需手动干预。
 
-### 场景三：滚动替换（kubectl rollout restart）⚠️ 视时序而定
+### 场景三：滚动替换（kubectl rollout restart）✅ 需要重启 EPP
 
-`rollout restart` 是滚动更新，逐一替换 pod。每个旧 pod 会先触发 UPDATE（标记为 Terminating），再触发 DELETE，然后新 pod 触发 ADD。
+`rollout restart` 产生新的 pod template hash，Deployment 创建新 ReplicaSet，旧 pod 逐步被新 pod 替换。
 
-实践中行为取决于 EPP 处理 UPDATE 事件的时序：
-- 若 EPP 在收到 DELETE 前已处理 UPDATE 并 shutdown 旧连接，新 pod ADD 时会重建
-- 若出现 ZMQ 断连但未恢复（表现为精准路由 score 0 持续），重启 EPP 即可
+**实测日志**（3 个 pod 全部如此）：
 
-**验证方式**：
-
-```bash
-bash /root/ai-model-gateway-base/llm-d/deploy-precise-prefix/verify-precise-prefix.sh
+```
+Connected subscriber socket  tcp://10.244.142.242:5556
+shutting down zmq-subscriber
+Connected subscriber socket  tcp://10.244.41.185:5556
+shutting down zmq-subscriber
+Connected subscriber socket  tcp://10.244.142.243:5556
+shutting down zmq-subscriber
 ```
 
-若 Check 3 路由集中度 < 60%，执行：
+每个新 pod Ready 后 EPP 都是 **Connected → 立刻 shutting down**，最终 ZMQ 全部断开，精准路由失效，退化为负载感知路由（queue + kv-util scorer 仍工作，推理请求不会失败）。
+
+**原因**：rollout restart 期间每个 pod 会先触发 UPDATE 事件（Terminating），EPP 对 UPDATE 事件的处理逻辑导致在连接建立后又触发了 shutdown，EPP v0.9.0 的已知行为。
+
+**修复**：
 
 ```bash
 kubectl rollout restart deployment/precise-prefix-cache-routing-epp -n llm-d-precise-prefix

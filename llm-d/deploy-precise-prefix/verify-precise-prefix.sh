@@ -102,46 +102,34 @@ else
     fail "找不到运行中的 EPP pod"
   else
     ZMQ_CONNECTED=0
-    # 获取全局最后一次 shutdown 时间戳（不带 endpoint 信息）
-    LAST_SHUTDOWN_TS=$(kubectl logs "$EPP_POD" -n "${NAMESPACE}" -c epp 2>/dev/null \
-      | python3 -c "
-import sys, json
-ts = 0
-for line in sys.stdin:
-    try:
-        d = json.loads(line)
-        if 'shutting down zmq-subscriber' in d.get('msg',''):
-            ts = max(ts, d.get('ts', 0))
-    except: pass
-print(ts)
-" 2>/dev/null)
-
     for ip in $VLLM_IPS; do
-      # 查该 IP 最后一次 Connected 的时间戳
-      LAST_CONNECT_TS=$(kubectl logs "$EPP_POD" -n "${NAMESPACE}" -c epp 2>/dev/null \
+      # 找该 IP 最后一条 ZMQ 相关日志，判断是 Connected 还是 shutting down
+      LAST_ZMQ_MSG=$(kubectl logs "$EPP_POD" -n "${NAMESPACE}" -c epp 2>/dev/null \
         | python3 -c "
 import sys, json
-ts = 0
+last_ts, last_msg = 0, ''
 for line in sys.stdin:
     try:
         d = json.loads(line)
-        ep = d.get('endpoint', '')
-        if 'Connected subscriber socket' in d.get('msg','') and '${ip}:5556' in ep:
-            ts = max(ts, d.get('ts', 0))
+        msg = d.get('msg','')
+        ep  = d.get('endpoint','')
+        ts  = d.get('ts', 0)
+        # Connected 日志带 endpoint 字段，shutting down 不带，按时间窗口关联
+        if 'Connected subscriber socket' in msg and '${ip}:5556' in ep and ts > last_ts:
+            last_ts, last_msg = ts, 'connected'
+        elif 'shutting down zmq-subscriber' in msg and ts > last_ts:
+            last_ts, last_msg = ts, 'shutdown'
     except: pass
-print(ts)
+print(last_msg)
 " 2>/dev/null)
 
-      if [ -z "$LAST_CONNECT_TS" ] || [ "$LAST_CONNECT_TS" = "0" ]; then
-        info "ZMQ 未连接: ${ip}:5556（无连接记录）"
-      elif python3 -c "exit(0 if float('${LAST_CONNECT_TS}') > float('${LAST_SHUTDOWN_TS:-0}') else 1)" 2>/dev/null; then
+      if [ "$LAST_ZMQ_MSG" = "connected" ]; then
         info "ZMQ 已连接: tcp://${ip}:5556"
         ZMQ_CONNECTED=$((ZMQ_CONNECTED+1))
+      elif [ "$LAST_ZMQ_MSG" = "shutdown" ]; then
+        info "ZMQ 已断开: ${ip}:5556（最后状态: shutting down，需重启 EPP）"
       else
-        # Connected 早于 shutdown，但可能连接一直健在（shutdown 是针对其他 IP 的）
-        # 用实际连接数兜底：连接数 >= vLLM pod 数则认为正常
-        info "ZMQ 已连接（持久连接）: tcp://${ip}:5556"
-        ZMQ_CONNECTED=$((ZMQ_CONNECTED+1))
+        info "ZMQ 无记录: ${ip}:5556"
       fi
     done
     if [ "$ZMQ_CONNECTED" -eq "$VLLM_COUNT" ]; then

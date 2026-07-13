@@ -97,9 +97,9 @@ args:
 
 - **最少 2 个 pod**：单 pod 下路由选择无意义，精准路由效果体现不出来
 - 每个 GPU 节点跑一个 pod，不同 pod 的 KV cache 相互独立，EPP 才能做有意义的路由决策
-- **扩容新 pod 无需重启 EPP**：EPP 的 pod_reconciler 监听 K8s pod ADD 事件，新 pod Ready 后自动发现并建立 ZMQ 订阅
-- **pod 重启（DELETE+ADD）无需重启 EPP**：EPP 收到 ADD 事件后自动重建 ZMQ 连接
-- **rollout restart 视时序而定**：若精准路由持续失效（verify 脚本 Check 3 < 60%），重启 EPP 即可恢复
+- **扩容新 pod 无需重启 EPP**：EPP 收到 pod ADD 事件后自动建立 ZMQ 订阅
+- **`kubectl delete pod` 无需重启 EPP**：Deployment 重建 pod，EPP 收到 ADD 事件自动重连
+- **`kubectl rollout restart` 需要重启 EPP**：滚动替换触发 UPDATE 事件，EPP 处理逻辑有 bug 导致 Connected 后立刻 shutting down，ZMQ 全部断开
 
 ```bash
 # pod 重启后（IP 变化），需手动重启 EPP
