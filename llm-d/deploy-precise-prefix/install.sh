@@ -58,7 +58,7 @@ metadata:
     app.kubernetes.io/component: vllm-render
     app.kubernetes.io/part-of: ${GUIDE_NAME}
 spec:
-  replicas: 1
+  replicas: 3
   selector:
     matchLabels:
       app.kubernetes.io/component: vllm-render
