@@ -95,7 +95,15 @@ vLLM 的 `--block-size` 必须与 EPP 配置中的 `tokenProcessorConfig.blockSi
 
 ### render Service
 
-render pod 使用 `vllm/vllm-openai-cpu:v0.23.0`（CPU-only 镜像），运行 `vllm launch render` 仅做 tokenize，**不加载模型权重，不需要 GPU**。render service 的模型名（args 第一个参数）须与 EPP `token-producer.modelName` 以及 vLLM `--served-model-name` 一致。
+render pod 使用 `vllm/vllm-openai-cpu:v0.23.0`（CPU-only 镜像），运行 `vllm launch render` 仅做 tokenize，**不加载模型权重，不需要 GPU**。
+
+> **重要**：render 的模型参数必须传**本地 snapshot 绝对路径**，并挂载 hostPath，设置 `HF_HUB_OFFLINE=1`。
+>
+> 如果传 HuggingFace 模型 ID（如 `Qwen/Qwen3-32B`），vLLM 会尝试联网下载 tokenizer 文件，在离线环境中必然失败（`LocalEntryNotFoundError`）。
+>
+> `install.sh` 已自动解析本地 snapshot 路径，与 `deploy-model.sh` 保持一致。
+
+render service 名（`${GUIDE_NAME}-render`）须与 EPP `token-producer.vllm.url` 配置一致。
 
 ### SERVED_MODEL 与 topic 对应
 
