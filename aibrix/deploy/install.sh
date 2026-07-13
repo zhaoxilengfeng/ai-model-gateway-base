@@ -47,3 +47,8 @@ kubectl get pods -n envoy-gateway-system
 kubectl get pods -n aibrix-system
 
 echo "Done."
+echo ""
+echo "部署完成后编辑 gateway-benchmark/config.yaml 填入 aibrix endpoint，"
+echo "然后运行性能基准测试："
+echo "  cd /root/ai-model-gateway-base/gateway-benchmark"
+echo "  ./run_aibrix.sh --workload sanity.yaml --experiment sanity.yaml"

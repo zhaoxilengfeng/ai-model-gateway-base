@@ -162,3 +162,21 @@ kubectl delete service qwen25-7b-instruct-v2 -n default
 | 模型文件缓存 | hostPath `/root/models` 挂载，首次启动会从 HF 下载，之后复用缓存 |
 | GPU 资源 | 每个 Pod 占用 1 块 GPU，集群当前共 2 块（host-000-003/004 各 1 块） |
 | startupProbe | `failureThreshold: 360`，允许模型加载最长 1 小时，不要调小 |
+
+---
+
+## 性能基准测试
+
+模型部署完成后，编辑 `gateway-benchmark/config.yaml` 的 `aibrix` 部分填入 gateway endpoint，然后运行：
+
+```bash
+cd /root/ai-model-gateway-base/gateway-benchmark
+
+# 快速验通
+./run_aibrix.sh --workload sanity.yaml --experiment sanity.yaml
+
+# 阶梯并发压测
+./run_aibrix.sh --workload sweep_chatbot.yaml --experiment concurrency_sweep.yaml
+```
+
+详见 [gateway-benchmark/README.md](../../gateway-benchmark/README.md)。

@@ -3,37 +3,61 @@
 # 用法: ./run.sh --gateway <llmd|aibrix> [OPTIONS]
 #
 # 选项:
-#   --gateway    llmd | aibrix （必填）
-#   --harness    inference-perf | guidellm  （默认读 config.yaml defaults.harness）
-#   --workload   profiles/<harness>/ 下的文件名，不含 .in 后缀（默认读 config.yaml）
-#   --experiment experiments/ 下的文件名（可选，不传则用 profile 内置阶梯）
-#   --parallelism 并行 harness pod 数（默认 1）
-#   --proxy      启用代理，如 socks5h://127.0.0.1:1080（默认不使用）
-#   --dry-run    仅打印命令，不实际执行
-#   --spec       llmdbenchmark --spec 参数（默认 gpu）
+#   --gateway         llmd | aibrix （必填）
+#   --harness         inference-perf | guidellm  （默认读 config.yaml defaults.harness）
+#   --workload        profiles/<harness>/ 下的文件名，不含 .in 后缀（默认读 config.yaml）
+#   --experiment      experiments/ 下的文件名（可选，不传则用 profile 内置阶梯）
+#   --parallelism     并行 harness pod 数（默认 1）
+#   --proxy           启用代理，如 socks5h://127.0.0.1:1080（默认不使用）
+#   --spec            llmdbenchmark --spec 参数（默认 gpu）
+#   --dry-run         仅打印命令，不实际执行
+#   --list-profiles   列出可用 profiles 后退出
+#   --list-experiments 列出可用 experiments 后退出
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG="${SCRIPT_DIR}/config.yaml"
 
-# --- 依赖检查 ---
+# llm-d-benchmark 仓库根目录（--base-dir 和 venv 的来源）
+LLMDBENCH_DIR="${LLMDBENCH_DIR:-/root/llm-d-benchmark}"
+
+# --- llmdbenchmark 自动查找 ---
+# 优先用已激活的 venv；否则尝试 llm-d-benchmark 项目目录下的 .venv
 if ! command -v llmdbenchmark &>/dev/null; then
-    echo "[ERROR] 'llmdbenchmark' not found. Run: source /root/llm-d-benchmark/.venv/bin/activate" >&2
+    VENV_CANDIDATES=(
+        "${LLMDBENCH_DIR}/.venv/bin/activate"
+        "${SCRIPT_DIR}/../.venv/bin/activate"
+    )
+    for venv in "${VENV_CANDIDATES[@]}"; do
+        if [[ -f "$venv" ]]; then
+            # shellcheck source=/dev/null
+            source "$venv"
+            break
+        fi
+    done
+fi
+
+if ! command -v llmdbenchmark &>/dev/null; then
+    echo "[ERROR] llmdbenchmark 未找到。请先运行：" >&2
+    echo "  cd ${LLMDBENCH_DIR} && bash install.sh --no-uv -y" >&2
+    echo "  source ${LLMDBENCH_DIR}/.venv/bin/activate" >&2
     exit 1
 fi
+
 if ! command -v python3 &>/dev/null; then
-    echo "[ERROR] 'python3' not found." >&2
+    echo "[ERROR] python3 未找到" >&2
     exit 1
 fi
 
 # 用 python3 读取 YAML（不依赖系统 yq）
 yaml_get() {
+    local key="$1"
     python3 -c "
-import sys, yaml
-with open('$CONFIG') as f:
+import yaml
+with open('${CONFIG}') as f:
     d = yaml.safe_load(f)
-keys = '$1'.lstrip('.').split('.')
+keys = '${key}'.lstrip('.').split('.')
 v = d
 for k in keys:
     v = v[k]
@@ -54,25 +78,48 @@ EXTRA_ARGS=()
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --gateway)    GATEWAY="$2";      shift 2 ;;
-        --harness)    HARNESS="$2";      shift 2 ;;
-        --workload)   WORKLOAD="$2";     shift 2 ;;
-        --experiment) EXPERIMENT="$2";   shift 2 ;;
-        --parallelism) PARALLELISM="$2"; shift 2 ;;
-        --proxy)      PROXY="$2";        shift 2 ;;
-        --spec)       SPEC="$2";         shift 2 ;;
-        --dry-run)    DRY_RUN=true;      shift ;;
-        *)            EXTRA_ARGS+=("$1"); shift ;;
+        --gateway)          GATEWAY="$2";      shift 2 ;;
+        --harness)          HARNESS="$2";      shift 2 ;;
+        --workload)         WORKLOAD="$2";     shift 2 ;;
+        --experiment)       EXPERIMENT="$2";   shift 2 ;;
+        --parallelism)      PARALLELISM="$2";  shift 2 ;;
+        --proxy)            PROXY="$2";        shift 2 ;;
+        --spec)             SPEC="$2";         shift 2 ;;
+        --dry-run)          DRY_RUN=true;      shift ;;
+        --list-profiles)
+            echo "=== 可用 Profiles ==="
+            for dir in "${SCRIPT_DIR}/profiles/"/*/; do
+                harness=$(basename "$dir")
+                echo "  [$harness]"
+                ls "$dir"*.in 2>/dev/null | xargs -n1 basename | sed 's/^/    /'
+            done
+            exit 0 ;;
+        --list-experiments)
+            echo "=== 可用 Experiments ==="
+            ls "${SCRIPT_DIR}/experiments/"*.yaml | xargs -n1 basename | sed 's/^/  /'
+            exit 0 ;;
+        *)                  EXTRA_ARGS+=("$1"); shift ;;
     esac
 done
 
 if [[ -z "$GATEWAY" ]]; then
-    echo "Usage: $0 --gateway <llmd|aibrix> [--harness ...] [--workload ...] [--experiment ...] [--dry-run]"
+    echo "Usage: $0 --gateway <llmd|aibrix> [OPTIONS]"
+    echo ""
+    echo "  --gateway         llmd | aibrix  （必填）"
+    echo "  --harness         inference-perf | guidellm"
+    echo "  --workload        profile 文件名（不含 .in）"
+    echo "  --experiment      experiment 文件名"
+    echo "  --parallelism     并行 pod 数（默认 1）"
+    echo "  --proxy           代理地址（默认不使用）"
+    echo "  --spec            llmdbenchmark --spec（默认 gpu）"
+    echo "  --dry-run         只打印命令"
+    echo "  --list-profiles   列出可用 profiles"
+    echo "  --list-experiments 列出可用 experiments"
     exit 1
 fi
 
 if [[ "$GATEWAY" != "llmd" && "$GATEWAY" != "aibrix" ]]; then
-    echo "[ERROR] --gateway must be 'llmd' or 'aibrix'" >&2
+    echo "[ERROR] --gateway 必须是 llmd 或 aibrix" >&2
     exit 1
 fi
 
@@ -89,30 +136,51 @@ fi
 HARNESS="${HARNESS:-$(yaml_get '.defaults.harness')}"
 WORKLOAD="${WORKLOAD:-$(yaml_get '.defaults.workload')}"
 PARALLELISM="${PARALLELISM:-$(yaml_get '.defaults.parallelism')}"
+DATA_ACCESS_TIMEOUT="$(yaml_get '.defaults.data_access_timeout' 2>/dev/null || echo '600')"
 
 # 移除 .in 后缀（用户可以带或不带）
 WORKLOAD="${WORKLOAD%.in}"
+
+# --- Profile 文件定位 ---
+PROFILE_DIR="${SCRIPT_DIR}/profiles/${HARNESS}"
+PROFILE_FILE="${PROFILE_DIR}/${WORKLOAD}.in"
+
+if [[ ! -f "$PROFILE_FILE" ]]; then
+    echo "[ERROR] profile 不存在: $PROFILE_FILE" >&2
+    echo "可用 profiles（${HARNESS}）:" >&2
+    ls "${PROFILE_DIR}/"*.in 2>/dev/null | xargs -n1 basename | sed 's/^/  /' >&2 || true
+    echo "使用 --list-profiles 查看全部" >&2
+    exit 1
+fi
+
+# --- Experiment 文件定位 ---
+EXP_ARG=()
+if [[ -n "$EXPERIMENT" ]]; then
+    # 支持传文件名（不含路径）或完整路径
+    if [[ "$EXPERIMENT" == */* ]]; then
+        EXP_FILE="$EXPERIMENT"
+    else
+        EXP_FILE="${SCRIPT_DIR}/experiments/${EXPERIMENT}"
+    fi
+    if [[ ! -f "$EXP_FILE" ]]; then
+        echo "[ERROR] experiment 文件不存在: $EXP_FILE" >&2
+        echo "可用 experiments:" >&2
+        ls "${SCRIPT_DIR}/experiments/"*.yaml | xargs -n1 basename | sed 's/^/  /' >&2
+        exit 1
+    fi
+    EXP_ARG=(--experiments "${EXP_FILE}")
+fi
 
 # --- 构造工作目录（按时间戳隔离） ---
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 WORKSPACE="${SCRIPT_DIR}/results/${GATEWAY}/${HARNESS}/${TIMESTAMP}"
 mkdir -p "$WORKSPACE"
 
-# --- 构造 llmdbenchmark 命令 ---
-# profiles 目录指向本项目自己的 profiles，传入绝对路径
-PROFILE_DIR="${SCRIPT_DIR}/profiles/${HARNESS}"
-PROFILE_FILE="${PROFILE_DIR}/${WORKLOAD}.in"
-
-if [[ ! -f "$PROFILE_FILE" ]]; then
-    echo "[ERROR] profile 不存在: $PROFILE_FILE" >&2
-    echo "可用 profiles:" >&2
-    ls "${PROFILE_DIR}/"*.in 2>/dev/null | xargs -n1 basename >&2
-    exit 1
-fi
-
+# --- 构造命令 ---
 CMD=(
     llmdbenchmark
     --spec "${SPEC}"
+    --base-dir "${LLMDBENCH_DIR}"
     --workspace "${WORKSPACE}"
     run
     --namespace "${NAMESPACE}"
@@ -121,33 +189,23 @@ CMD=(
     --harness "${HARNESS}"
     --workload "${PROFILE_FILE}"
     --parallelism "${PARALLELISM}"
+    --data-access-timeout "${DATA_ACCESS_TIMEOUT}"
+    "${EXP_ARG[@]}"
+    "${EXTRA_ARGS[@]}"
 )
 
-if [[ -n "$EXPERIMENT" ]]; then
-    EXP_FILE="${SCRIPT_DIR}/experiments/${EXPERIMENT}"
-    if [[ ! -f "$EXP_FILE" ]]; then
-        echo "[ERROR] experiment 文件不存在: $EXP_FILE" >&2
-        echo "可用 experiments:" >&2
-        ls "${SCRIPT_DIR}/experiments/"*.yaml | xargs -n1 basename >&2
-        exit 1
-    fi
-    CMD+=(--experiments "${EXP_FILE}")
-fi
-
-CMD+=("${EXTRA_ARGS[@]}")
-
-# --- 执行 ---
+# --- 打印摘要 ---
 echo "=========================================="
-echo "  网关:       $GATEWAY"
-echo "  Endpoint:   $ENDPOINT_URL"
-echo "  Model:      $MODEL"
-echo "  Namespace:  $NAMESPACE"
-echo "  Harness:    $HARNESS"
-echo "  Workload:   $WORKLOAD"
-echo "  Experiment: ${EXPERIMENT:-（无，使用 profile 内置阶梯）}"
+echo "  网关:        $GATEWAY"
+echo "  Endpoint:    $ENDPOINT_URL"
+echo "  Model:       $MODEL"
+echo "  Namespace:   $NAMESPACE"
+echo "  Harness:     $HARNESS"
+echo "  Workload:    $WORKLOAD"
+echo "  Experiment:  ${EXPERIMENT:-（无，使用 profile 内置阶梯）}"
 echo "  Parallelism: $PARALLELISM"
-echo "  Proxy:      ${PROXY:-（未启用）}"
-echo "  结果目录:   $WORKSPACE"
+echo "  Proxy:       ${PROXY:-（未启用）}"
+echo "  结果目录:    $WORKSPACE"
 echo "=========================================="
 echo ""
 echo "命令: ${CMD[*]}"
