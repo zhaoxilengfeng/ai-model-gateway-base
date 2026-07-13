@@ -179,17 +179,39 @@ block_hash_B → { 10.244.142.250: {tier: gpu, ts: T1},
 block_hash_C → { 10.244.41.130:  {tier: gpu, ts: T3} }
 ```
 
-### 索引的动态维护
+### 索引的动态维护（增量更新，非全量重算）
 
-EPP 实时处理三种事件对索引的影响：
+EPP 索引是**持久化的内存结构，事件驱动增量更新**。vLLM 只上报变化的块，不重复上报已有缓存：
+
+| 事件 | 触发时机 | 索引操作 |
+|---|---|---|
+| `BlockStored(hash, pod)` | prefill 完成，新增 KV 块 | `index[hash][pod] = {tier, ts}` |
+| `BlockRemoved(hash, pod)` | LRU 驱逐，块被淘汰 | `index[hash].pop(pod)` |
+| `AllBlocksCleared(pod)` | cache 整体清空 | 遍历索引，删除该 pod 所有条目 |
+
+**匹配计算只在请求到来时触发一次**，对当前索引快照做查询，时间复杂度 O(块数 × pod数)，非常轻量。
+
+时序示意：
 
 ```
-BlockStored  → index[hash][pod]  = {tier, ts}     (写入)
-BlockRemoved → index[hash].pop(pod)                (删除)
-AllBlocksCleared → for hash in index: index[hash].pop(pod)  (清除该 pod 所有记录)
+vLLM pod A                         EPP 索引（持久存在于内存）
+   │                                    │
+   ├─ BlockStored(B0, B1, B2) ─────────►│  index[B0][A]=gpu
+   │  （prefill 完成，新增3块）          │  index[B1][A]=gpu
+   │                                    │  index[B2][A]=gpu
+   │
+   │   ← 请求1到来（前缀包含 B0,B1,B2）
+   │                                    ├─ 查 index：B0✓ B1✓ B2✓ → score=1.0 → 路由到 A
+   │
+   ├─ BlockStored(B3) ─────────────────►│  index[B3][A]=gpu （只上报新增的 B3）
+   │
+   ├─ BlockRemoved(B0) ────────────────►│  index[B0].pop(A) （LRU 驱逐 B0）
+   │
+   │   ← 请求2到来（相同前缀）
+   │                                    ├─ 查 index：B0✗ → 连续前缀断链 → score=0
 ```
 
-LRU 在内存压力下自动淘汰最旧的条目，整个过程对路由透明（被淘汰的条目相当于 cache miss，降级为负载感知路由）。
+**关键点**：vLLM 不会把所有已缓存块全量重发，只在状态变化时推送增量事件。EPP 维护的是一张实时同步的"哪个 pod 缓存了哪些块"的镜像，请求到来时直接查表，不重新计算任何东西。
 
 ### 两种 ZMQ 连接模式
 
