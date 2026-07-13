@@ -10,3 +10,4 @@
 | [multi-pool-httproute.md](multi-pool-httproute.md) | 多 InferencePool + HTTPRoute 分流配置 |
 | [vllm-deployment.md](vllm-deployment.md) | vLLM 部署配置要点 |
 | [epp-zmq-pod-discovery.md](epp-zmq-pod-discovery.md) | EPP ZMQ 订阅的自动发现与重连机制（扩容 vs 重启的行为差异）|
+| [render-service.md](render-service.md) | render service 详解：tokenize 原理、API、三处一致性约束 |
