@@ -95,7 +95,7 @@ vLLM 的 `--block-size` 必须与 EPP 配置中的 `tokenProcessorConfig.blockSi
 
 ### render Service
 
-render pod 运行 `vllm launch render`，仅做 tokenize，**不加载模型权重，不需要 GPU**。与 model server 共用同一镜像（`vllm/vllm-openai:v0.23.0`），但 pod spec 不申请 `nvidia.com/gpu` 资源，K8s 不会给它分配 GPU，调度到 GPU 节点上也无影响。render service 的模型名（args 第一个参数）须与 EPP `token-producer.modelName` 以及 vLLM `--served-model-name` 一致。
+render pod 使用 `vllm/vllm-openai-cpu:v0.23.0`（CPU-only 镜像），运行 `vllm launch render` 仅做 tokenize，**不加载模型权重，不需要 GPU**。render service 的模型名（args 第一个参数）须与 EPP `token-producer.modelName` 以及 vLLM `--served-model-name` 一致。
 
 ### SERVED_MODEL 与 topic 对应
 
