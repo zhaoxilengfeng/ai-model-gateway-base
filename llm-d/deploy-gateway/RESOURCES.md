@@ -10,62 +10,73 @@
 外部请求
   │
   ▼
-NodePort (svc/llm-d-inference-gateway :80 → :32212)
+NodePort 32212  (svc/llm-d-inference-gateway  80:32212/TCP)
   │
   ▼
-agentgateway proxy pod           ← 数据面，处理流量转发
-  │  (读取 xDS 配置来自 agentgateway controller)
+agentgateway proxy pod  [10.244.117.176, host-000-004]
+  │  cr.agentgateway.dev/agentgateway:v1.3.1
+  │  从 agentgateway controller 通过 xDS gRPC(:9978) 获取路由配置
   ▼
-HTTPRoute (quickstart)           ← 路由规则：所有路径 → InferencePool
-  │
+HTTPRoute/quickstart
+  │  path prefix / → InferencePool/quickstart
   ▼
-InferencePool (quickstart)       ← 调度层：由 EPP 选择后端
+InferencePool/quickstart
   │  selector: llm-d.ai/guide=optimized-baseline
+  │  endpointPickerRef → svc/quickstart-epp:9002
   ▼
-EPP pod (quickstart-epp :9002)   ← Endpoint Picker，智能选择 vLLM 实例
-  │  (感知 KV Cache、prefill/decode 负载)
+EPP pod  [10.244.117.177, host-000-004]
+  │  ghcr.io/llm-d/llm-d-router-endpoint-picker:v0.9.0
+  │  感知 KV Cache / prefill-decode 负载，选出最优 vLLM pod
   ▼
-vLLM pod (qwen25-7b-instruct :8000)
+vLLM pod  [10.244.41.172, host-000-005]
+  │  vllm/vllm-openai:v0.23.0
+  │  OpenAI 兼容 HTTP API :8000
+  ▼
+GPU 推理
 ```
 
 ---
 
 ## Namespace 分布
 
-| Namespace | 用途 |
+| Namespace | 职责 |
 |---|---|
-| `agentgateway-system` | agentgateway 控制面（controller） |
-| `llm-d-gateway` | 数据面 + 推理工作负载 |
+| `agentgateway-system` | agentgateway 控制面（controller），管理 GatewayClass 和 xDS 配置下发 |
+| `llm-d-gateway` | 数据面 proxy + 推理工作负载（EPP、vLLM）|
 
 ---
 
-## 资源清单
+## 集群级资源
 
-### agentgateway-system
+### GatewayClass
 
-#### GatewayClass（集群级）
+| 字段 | 值 |
+|---|---|
+| 名称 | `agentgateway` |
+| controllerName | `agentgateway.dev/agentgateway` |
+| 状态 | Accepted=True |
+| 创建方式 | helm agentgateway chart（install.sh Step 3）|
 
-```
-名称: agentgateway
-controllerName: agentgateway.dev/agentgateway
-状态: Accepted
-```
+注册 agentgateway 实现。所有 `gatewayClassName: agentgateway` 的 Gateway 对象均由其控制面管理。
 
-注册 `agentgateway` 这个 Gateway 实现，所有 `gatewayClassName: agentgateway` 的 Gateway 对象由它管理。由 `install.sh` Step 3 的 helm chart 自动创建。
+### CRDs
 
-#### Deployment / Pod — agentgateway controller
+**Gateway API（GIE，Gateway API Inference Extension）**
 
-```
-名称: agentgateway
-镜像: ghcr.io/agentgateway/controller:v1.3.1
-```
+| CRD | 用途 |
+|---|---|
+| `gateways.gateway.networking.k8s.io` | Gateway 入口点定义 |
+| `gatewayclasses.gateway.networking.k8s.io` | Gateway 实现注册 |
+| `httproutes.gateway.networking.k8s.io` | HTTP 路由规则 |
+| `grpcroutes.gateway.networking.k8s.io` | gRPC 路由规则 |
+| `referencegrants.gateway.networking.k8s.io` | 跨 namespace 引用授权 |
+| `inferencepools.inference.networking.k8s.io` | 推理后端池（GIE v1） |
+| `inferencemodels.inference.networking.x-k8s.io` | 推理模型声明（GIE 实验） |
+| `inferencepools.inference.networking.x-k8s.io` | 推理后端池（GIE 实验） |
 
-控制面进程，职责：
-- 监听 GatewayClass / Gateway / HTTPRoute / InferencePool 等对象变化
-- 通过 xDS gRPC（:9978）将路由配置下发给数据面 proxy pod
-- 管理 agentgateway-system 内 ClusterIP svc（:9978 xDS / :9092 metrics / :9093 health）
+由 install.sh Step 1（`kubectl apply --server-side -f gie-v1.5.0.yaml`）安装。
 
-#### CRDs（agentgateway 专属）
+**agentgateway 专属**
 
 | CRD | 用途 |
 |---|---|
@@ -73,111 +84,168 @@ controllerName: agentgateway.dev/agentgateway
 | `agentgatewayparameters.agentgateway.dev` | Gateway 参数配置 |
 | `agentgatewaypolicies.agentgateway.dev` | 流量策略 |
 
-由 `install.sh` Step 2 单独 apply（不随 helm chart 打包，需从 GitHub 手动下载）。
+由 install.sh Step 2（`kubectl apply --server-side -f agentgateway-crds/`）安装，**不随 helm chart 打包**，需从 GitHub 单独下载。
+
+### ClusterRole / ClusterRoleBinding
+
+| 资源 | 名称 | 用途 |
+|---|---|---|
+| ClusterRole | `agentgateway-agentgateway-system` | agentgateway controller 读取 Gateway/HTTPRoute/InferencePool 等资源权限 |
+| ClusterRoleBinding | `agentgateway-role-agentgateway-system` | 绑定到 `agentgateway-system/agentgateway` ServiceAccount |
 
 ---
 
-### llm-d-gateway
+## Namespace: agentgateway-system
 
-#### Gateway
+### Pod
+
+| 名称 | 镜像 | 节点 | IP |
+|---|---|---|---|
+| `agentgateway-57f54c856-w9bl2` | `cr.agentgateway.dev/controller:v1.3.1` | host-000-004 | 10.244.117.175 |
+
+### Deployment
+
+| 名称 | 副本 | 镜像 |
+|---|---|---|
+| `agentgateway` | 1/1 | `cr.agentgateway.dev/controller:v1.3.1` |
+
+**职责**：
+- 监听 GatewayClass / Gateway / HTTPRoute / InferencePool 对象变化
+- 将路由配置通过 xDS gRPC 下发给数据面 proxy pod
+- 发现 Gateway 对象后，在对应 namespace 自动创建 proxy Deployment + Service
+
+### Service
+
+| 名称 | 类型 | ClusterIP | 端口 |
+|---|---|---|---|
+| `agentgateway` | ClusterIP | 10.97.7.178 | 9978/TCP（xDS gRPC）, 9093/TCP（health）, 9092/TCP（metrics）|
+
+### ServiceAccount
+
+| 名称 | 说明 |
+|---|---|
+| `agentgateway` | controller pod 使用，绑定 ClusterRole 读取集群资源 |
+
+### Secret
+
+| 名称 | 类型 | 说明 |
+|---|---|---|
+| `kgateway-xds-cert` | Opaque | xDS TLS 证书，controller 与 proxy 之间加密通信用 |
+| `sh.helm.release.v1.agentgateway.v1` | helm.sh/release.v1 | Helm 发布元数据 |
+
+---
+
+## Namespace: llm-d-gateway
+
+### Pod
+
+| 名称 | 镜像 | 节点 | IP | 说明 |
+|---|---|---|---|---|
+| `llm-d-inference-gateway-669f9c6466-2n7bh` | `cr.agentgateway.dev/agentgateway:v1.3.1` | host-000-004 | 10.244.117.176 | 数据面 proxy，agentgateway controller 自动创建 |
+| `quickstart-epp-798cf686cb-mpjjt` | `ghcr.io/llm-d/llm-d-router-endpoint-picker:v0.9.0` | host-000-004 | 10.244.117.177 | EPP，智能选择 vLLM 后端 |
+| `qwen25-7b-instruct-847c7d995-5t9j5` | `vllm/vllm-openai:v0.23.0` | host-000-005 | 10.244.41.172 | vLLM 推理服务 |
+
+### Deployment
+
+| 名称 | 副本 | 镜像 | 创建方式 |
+|---|---|---|---|
+| `llm-d-inference-gateway` | 1/1 | `cr.agentgateway.dev/agentgateway:v1.3.1` | controller 自动生成（非手动） |
+| `quickstart-epp` | 1/1 | `ghcr.io/llm-d/llm-d-router-endpoint-picker:v0.9.0` | helm llm-d-router-gateway |
+| `qwen25-7b-instruct` | 1/1 | `vllm/vllm-openai:v0.23.0` | deploy-model.sh |
+
+### Service
+
+| 名称 | 类型 | ClusterIP | 端口 | Selector |
+|---|---|---|---|---|
+| `llm-d-inference-gateway` | LoadBalancer | 10.110.10.16 | **80:32212/TCP**（NodePort 对外暴露）| gateway-name=llm-d-inference-gateway |
+| `quickstart-epp` | ClusterIP | 10.97.170.239 | 9002/TCP（gRPC，EPP 选路）, 9090/TCP（metrics）, 80/TCP（HTTP）| llm-d-router-gateway=quickstart-epp |
+| `qwen25-7b-instruct` | ClusterIP | 10.99.253.105 | 8000/TCP（OpenAI API）| llm-d.ai/guide=optimized-baseline, llm-d.ai/model=qwen25-7b-instruct |
+
+### Gateway
 
 ```yaml
 名称: llm-d-inference-gateway
 gatewayClassName: agentgateway
 listeners:
-  - port: 80, protocol: HTTP, allowedRoutes.from: All
-状态: Programmed=True, attachedRoutes=1
+  - name: default
+    port: 80
+    protocol: HTTP
+    allowedRoutes.namespaces.from: All
+状态: Accepted=True, Programmed=True, attachedRoutes=1
+创建方式: kubectl apply -k guides/recipes/gateway/agentgateway（install.sh Step 6）
 ```
 
-代表一个入口点实例。agentgateway controller 发现此对象后，在 `llm-d-gateway` namespace 中创建对应的 **proxy Deployment + LoadBalancer Service**。
+agentgateway controller 发现此对象后自动创建 proxy Deployment 和 LoadBalancer Service。
 
-由 `install.sh` Step 6 通过 kustomize 创建：
-```bash
-kubectl apply -k guides/recipes/gateway/agentgateway -n llm-d-gateway
-```
-
-#### Deployment / Pod — agentgateway proxy（数据面）
-
-```
-名称: llm-d-inference-gateway
-镜像: ghcr.io/agentgateway/agentgateway:v1.3.1
-```
-
-**由 agentgateway controller 自动生成**（非手动创建），每个 Gateway 对象对应一个 proxy Deployment。负责实际接收并转发 HTTP 流量。
-
-#### Service — llm-d-inference-gateway
-
-```
-类型: LoadBalancer（外部 IP pending，NodePort 可用）
-端口: 80 → NodePort 32212
-```
-
-暴露 proxy pod，外部通过 `<NodeIP>:32212` 访问。
-
-#### HTTPRoute
+### HTTPRoute
 
 ```yaml
 名称: quickstart
 parentRefs:
   - Gateway/llm-d-inference-gateway
 rules:
-  - matches: path prefix /
+  - matches:
+      - path: PathPrefix /        # 匹配所有路径
     backendRefs:
-      - InferencePool/quickstart (weight: 1)
+      - kind: InferencePool
+        name: quickstart
+        weight: 1
     timeouts:
-      request: 300s
+      request: 300s              # 推理超时 5 分钟
+状态: Accepted=True, ResolvedRefs=True
+创建方式: helm llm-d-router-gateway（install.sh Step 7，--set httpRoute.create=true）
 ```
 
-将所有 `/v1/...` 请求路由到 `InferencePool/quickstart`。由 `install.sh` Step 7 helm 安装时通过 `--set httpRoute.create=true` 创建。
-
-#### InferencePool
+### InferencePool
 
 ```yaml
 名称: quickstart
+appProtocol: http
 selector:
   matchLabels:
-    llm-d.ai/guide: optimized-baseline   # 选中 vLLM pod
+    llm-d.ai/guide: optimized-baseline    # 选中 vLLM pod
 targetPorts:
-  - number: 8000
+  - number: 8000                           # 转发到 vLLM 端口
 endpointPickerRef:
   kind: Service
   name: quickstart-epp
-  port: 9002
-  failureMode: FailOpen
+  port: 9002                               # 调用 EPP gRPC 接口选路
+  failureMode: FailOpen                    # EPP 故障时退化为随机转发
+状态: Accepted=True, ResolvedRefs=True
+创建方式: helm llm-d-router-gateway（install.sh Step 7）
 ```
 
-Gateway API Inference Extension（GIE）引入的资源类型，作用：
-- 用 label selector 圈定一组 vLLM pod 作为候选后端
-- 把请求转发给 EPP（:9002）做智能选择，由 EPP 返回最优 pod IP
-- `failureMode: FailOpen`：EPP 故障时退化为随机转发，不中断服务
+### ServiceAccount
 
-由 `install.sh` Step 7 helm 创建。
+| 名称 | 说明 |
+|---|---|
+| `llm-d-inference-gateway` | proxy pod 使用 |
+| `quickstart-epp` | EPP pod 使用，绑定 Role 读取 pod/endpoint 资源 |
 
-#### Deployment / Pod — quickstart-epp（EPP）
+### Role / RoleBinding
 
-```
-名称: quickstart-epp
-镜像: ghcr.io/llm-d/llm-d-router-endpoint-picker:v0.9.0
-服务: ClusterIP :9002（gRPC，供 InferencePool 调用）/ :9090（metrics）/ :80（HTTP）
-```
+| 名称 | 类型 | 说明 |
+|---|---|---|
+| `quickstart-epp-sa` | Role | EPP ServiceAccount 权限：读取 pods、endpoints、endpointslices |
+| `quickstart-epp-non-sa` | Role | 非 SA 访问补充权限 |
+| `quickstart-epp-sa` | RoleBinding | 绑定 quickstart-epp ServiceAccount |
+| `quickstart-epp-non-sa` | RoleBinding | 绑定补充权限 |
 
-Endpoint Picker，llm-d 的核心调度组件：
-- 通过 label selector（`llm-d.ai/guide=optimized-baseline`）持续感知 vLLM pod 列表
-- 收集每个 pod 的 KV Cache 使用率、prefill/decode 负载等指标
-- 收到请求时选择最优 pod（最低负载 / KV Cache 命中率最高）
-- 将选中的 pod IP 返回给 agentgateway proxy，proxy 直连该 pod
+### ConfigMap
 
-#### Deployment / Pod — vLLM model
+| 名称 | 说明 |
+|---|---|
+| `llm-d-inference-gateway` | proxy pod 配置文件（由 controller 生成） |
+| `llm-d-inference-gateway-xds-ca` | xDS TLS CA 证书（proxy 验证 controller 身份） |
+| `quickstart-epp` | EPP 配置（模型名、调度策略等） |
 
-```
-名称: qwen25-7b-instruct
-镜像: vllm/vllm-openai:v0.23.0
-标签: llm-d.ai/guide=optimized-baseline, llm-d.ai/model=qwen25-7b-instruct
-挂载: hostPath /root/models → /root/models
-服务: ClusterIP :8000（OpenAI 兼容 HTTP API）
-```
+### Secret
 
-实际执行推理的 GPU 工作负载。通过 label 被 InferencePool selector 和 EPP 发现。
+| 名称 | 类型 | 说明 |
+|---|---|---|
+| `llm-d-hf-token` | Opaque | HuggingFace Token（本环境填 dummy）|
+| `llm-d-inference-gateway-session-key` | Opaque | proxy session 加密密钥 |
+| `sh.helm.release.v1.quickstart.v1` | helm.sh/release.v1 | Helm 发布元数据 |
 
 ---
 
@@ -185,19 +253,20 @@ Endpoint Picker，llm-d 的核心调度组件：
 
 | 资源 | 创建方式 | install.sh 步骤 |
 |---|---|---|
+| GIE CRDs | `kubectl apply --server-side -f gie-v1.5.0.yaml` | Step 1 |
+| agentgateway CRDs | `kubectl apply --server-side -f agentgateway-crds/` | Step 2 |
 | GatewayClass `agentgateway` | helm agentgateway chart | Step 3 |
-| agentgateway controller Deployment | helm agentgateway chart | Step 3 |
-| agentgateway CRDs | kubectl apply --server-side | Step 2 |
-| GIE CRDs（InferencePool 等） | kubectl apply --server-side | Step 1 |
+| agentgateway controller Deployment/Service/SA | helm agentgateway chart | Step 3 |
+| ClusterRole / ClusterRoleBinding | helm agentgateway chart | Step 3 |
+| Namespace `llm-d-gateway` | kubectl create namespace | Step 4 |
+| Secret `llm-d-hf-token` | kubectl create secret | Step 5 |
 | Gateway `llm-d-inference-gateway` | kubectl apply -k (kustomize) | Step 6 |
-| agentgateway proxy Deployment | **controller 自动生成** | — |
-| Service `llm-d-inference-gateway` | **controller 自动生成** | — |
+| **proxy Deployment / Service / ConfigMap / Secret** | **agentgateway controller 自动生成** | — |
 | HTTPRoute `quickstart` | helm llm-d-router-gateway | Step 7 |
 | InferencePool `quickstart` | helm llm-d-router-gateway | Step 7 |
-| Deployment `quickstart-epp` | helm llm-d-router-gateway | Step 7 |
-| Service `quickstart-epp` | helm llm-d-router-gateway | Step 7 |
-| Deployment `qwen25-7b-instruct` | deploy-model.sh | 独立脚本 |
-| Service `qwen25-7b-instruct` | deploy-model.sh | 独立脚本 |
+| Deployment `quickstart-epp` + Service + SA + Role | helm llm-d-router-gateway | Step 7 |
+| ConfigMap `quickstart-epp` | helm llm-d-router-gateway | Step 7 |
+| Deployment `qwen25-7b-instruct` + Service | deploy-model.sh | 独立脚本 |
 
 ---
 
@@ -209,8 +278,12 @@ kubectl get pods -n agentgateway-system
 kubectl get gatewayclass agentgateway
 
 # 数据面 + 工作负载
-kubectl get pods,svc -n llm-d-gateway
+kubectl get pods,svc -n llm-d-gateway -o wide
 kubectl get gateway,httproute,inferencepool -n llm-d-gateway
+
+# RBAC
+kubectl get sa,role,rolebinding -n llm-d-gateway
+kubectl get clusterrole,clusterrolebinding | grep agentgateway
 
 # 端到端测试
 bash test-llmd.sh
