@@ -4,8 +4,12 @@
 # 检测逻辑：
 #   1. ZMQ 连接：EPP 是否成功订阅了 vLLM pod 的 KV 事件 socket
 #   2. token-producer：render service 是否能正常 tokenize（无 404/连接错误）
-#   3. prefix-cache-scorer：是否有 "score 0" 报错（说明索引未建立）
-#   4. 端到端：发送两次相同前缀请求，对比响应时间（第二次应更快）
+#   3. prefix-cache-scorer：EPP 是否在正常处理请求（无 score 0 报错）
+#   4. 端到端：发送相同前缀请求两次，验证路由链路通畅
+#
+# 注意：EPP 必须在 vLLM pod 之后启动，pod-discovery 才能正确建立 ZMQ 订阅。
+# 若 vLLM pod 重启后精准路由失效，执行：
+#   kubectl rollout restart deployment/precise-prefix-cache-routing-epp -n llm-d-precise-prefix
 set -e
 
 NAMESPACE="${NAMESPACE:-llm-d-precise-prefix}"
@@ -90,59 +94,56 @@ fi
 echo ""
 
 # ── 3. prefix-cache-scorer 索引检查 ────────────────────────────────────────────
-echo "[3] prefix-cache-scorer 索引检查（是否有 score 0 告警）:"
+echo "[3] prefix-cache-scorer 索引检查:"
 
 EPP_POD=$(kubectl get pods -n "${NAMESPACE}" | grep "${GUIDE_NAME}-epp" | grep Running | head -1 | awk '{print $1}')
 if [ -n "$EPP_POD" ]; then
   EPP_IP=$(kubectl get svc "${GUIDE_NAME}-epp" -n "${NAMESPACE}" \
     -o jsonpath='{.spec.clusterIP}' 2>/dev/null)
-  # 先发两次预热请求，让索引有机会建立
+
+  # 发两次相同的长前缀请求，间隔 3s 让 KV 事件传播
+  LONG_PROMPT="请详细解释 Transformer 架构中多头自注意力机制的数学原理，包括 Query Key Value 矩阵的计算方式、Softmax 归一化、缩放点积注意力的完整推导过程"
   for i in 1 2; do
     curl -sf --max-time 30 "http://${EPP_IP}/v1/chat/completions" \
       -H 'Content-Type: application/json' \
-      -d "{\"model\":\"${MODEL}\",\"messages\":[{\"role\":\"user\",\"content\":\"warmup ${i}\"}],\"max_tokens\":5}" \
+      -d "{\"model\":\"${MODEL}\",\"messages\":[{\"role\":\"user\",\"content\":\"${LONG_PROMPT}\"}],\"max_tokens\":5}" \
       &>/dev/null || true
-    sleep 1
+    [ "$i" -eq 1 ] && sleep 3
   done
-
-  # 记录当前时间戳，只看此后的日志
-  TS_BEFORE=$(date +%s)
-  # 发一次正式请求
-  REQ_ID=$(curl -sf --max-time 30 "http://${EPP_IP}/v1/chat/completions" \
-    -H 'Content-Type: application/json' \
-    -d "{\"model\":\"${MODEL}\",\"messages\":[{\"role\":\"user\",\"content\":\"prefix check\"}],\"max_tokens\":5}" \
-    | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('id',''))" 2>/dev/null || echo "")
   sleep 1
 
-  # 只查该请求的 score 0 日志
-  SCORE_ERR=$(kubectl logs "$EPP_POD" -n "${NAMESPACE}" -c epp --tail=30 2>/dev/null \
-    | grep "PrefixCacheMatchInfo not found" | tail -1)
-  # 如果 score 0 但同时 token-producer 也有错，才是真正失败
-  TOKEN_FAIL=$(kubectl logs "$EPP_POD" -n "${NAMESPACE}" -c epp --tail=30 2>/dev/null \
-    | grep '"failed to prepare per request data"' | tail -1)
+  # 取最近两次请求日志，检查是否有 score 0
+  RECENT_LOGS=$(kubectl logs "$EPP_POD" -n "${NAMESPACE}" -c epp --tail=20 2>/dev/null)
+  SCORE_ERR=$(echo "$RECENT_LOGS" | grep "PrefixCacheMatchInfo not found" | tail -2)
+  TOKEN_FAIL=$(echo "$RECENT_LOGS" | grep '"failed to prepare per request data"' | tail -1)
+  ZMQ_SHUTDOWN=$(echo "$RECENT_LOGS" | grep "shutting down zmq-subscriber" | tail -1)
+  RECEIVED=$(echo "$RECENT_LOGS" | grep '"EPP received request"' | wc -l)
 
-  if [ -n "$SCORE_ERR" ] && [ -n "$TOKEN_FAIL" ]; then
-    fail "prefix-cache-scorer score 0 且 token-producer 失败（索引无法建立）"
-    info "token-producer 错误: $(echo "$TOKEN_FAIL" | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(d.get('error','')[:100])" 2>/dev/null)"
+  if [ -n "$ZMQ_SHUTDOWN" ]; then
+    fail "ZMQ subscriber 已关闭（vLLM pod 可能已重启），请重启 EPP："
+    info "  kubectl rollout restart deployment/${GUIDE_NAME}-epp -n ${NAMESPACE}"
+  elif [ -n "$TOKEN_FAIL" ]; then
+    fail "token-producer 失败，索引无法建立"
+    info "错误: $(echo "$TOKEN_FAIL" | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(d.get('error','')[:100])" 2>/dev/null)"
   elif [ -n "$SCORE_ERR" ]; then
-    # score 0 但 token-producer 正常 → 可能是第一次请求还没有历史 KV 数据，属正常
-    ok "prefix-cache-scorer 运行正常（首次请求无历史 KV 索引属正常，score 0 不代表失败）"
+    fail "prefix-cache-scorer 持续 score 0（ZMQ 连接正常但 KV 索引未建立）"
+    info "可能原因：EPP 早于 vLLM 启动，请重启 EPP："
+    info "  kubectl rollout restart deployment/${GUIDE_NAME}-epp -n ${NAMESPACE}"
   else
-    ok "prefix-cache-scorer 正常，无 score 0 告警"
+    ok "prefix-cache-scorer 正常工作，KV 索引已建立，路由决策正常"
   fi
 fi
 echo ""
 
-# ── 4. 端到端：相同前缀两次请求，对比响应时间 ─────────────────────────────────
-echo "[4] 端到端前缀命中验证（相同 prompt 发送两次，第二次应利用 KV cache）:"
+# ── 4. 端到端：相同前缀两次请求 ───────────────────────────────────────────────
+echo "[4] 端到端前缀命中验证（相同 prompt 发送两次，验证路由链路）:"
 
 EPP_IP=$(kubectl get svc "${GUIDE_NAME}-epp" -n "${NAMESPACE}" \
   -o jsonpath='{.spec.clusterIP}' 2>/dev/null)
 if [ -z "$EPP_IP" ]; then
   fail "找不到 svc/${GUIDE_NAME}-epp"
 else
-  # 使用固定长前缀（>64 tokens，超过一个 block）
-  PROMPT="请详细解释 Transformer 架构中的自注意力机制。从数学角度说明 Query、Key、Value 矩阵的计算方式，以及 Softmax 归一化的作用，还有多头注意力如何并行处理不同的表示子空间。"
+  PROMPT="请详细解释 Transformer 架构中的自注意力机制，从数学角度说明 Query、Key、Value 矩阵的计算方式，以及 Softmax 归一化的作用"
 
   info "发送第1次请求..."
   T1_START=$(date +%s%3N)
@@ -152,13 +153,11 @@ else
   T1_END=$(date +%s%3N)
   T1=$((T1_END - T1_START))
 
-  if ! echo "$RESP1" | grep -q '"finish_reason"'; then
+  if ! echo "${RESP1}" | grep -q '"finish_reason"'; then
     fail "第1次请求失败: $(echo $RESP1 | cut -c1-100)"
   else
     info "第1次耗时: ${T1}ms"
-
-    # 等 vLLM 将 KV 事件发布给 EPP
-    sleep 2
+    sleep 3  # 等待 KV 事件传播到 EPP 索引
 
     info "发送第2次请求（相同前缀）..."
     T2_START=$(date +%s%3N)
@@ -168,15 +167,13 @@ else
     T2_END=$(date +%s%3N)
     T2=$((T2_END - T2_START))
 
-    if ! echo "$RESP2" | grep -q '"finish_reason"'; then
+    if ! echo "${RESP2}" | grep -q '"finish_reason"'; then
       fail "第2次请求失败: $(echo $RESP2 | cut -c1-100)"
     else
       info "第2次耗时: ${T2}ms"
+      ok "两次请求均成功，端到端路由链路正常"
       if [ "$T2" -lt "$T1" ]; then
-        ok "第2次 (${T2}ms) < 第1次 (${T1}ms)，前缀缓存生效，KV cache 命中"
-      else
-        info "第2次 (${T2}ms) >= 第1次 (${T1}ms)（单 pod 下差异可能不明显，属正常）"
-        ok "两次请求均成功，路由链路正常"
+        info "第2次更快 (${T2}ms < ${T1}ms)，vLLM 内部前缀缓存命中"
       fi
     fi
   fi
