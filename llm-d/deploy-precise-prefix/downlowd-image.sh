@@ -22,6 +22,10 @@ pull_from_aliyun() {
   local cached="$1" original="$2"
   local tarfile="$TMP/${cached//:/-}.tar"
   echo "--- $cached"
+  if ctr -n k8s.io image ls 2>/dev/null | grep -qF "$original"; then
+    echo "  已存在，跳过"
+    return
+  fi
   skopeo copy \
     --override-os linux --override-arch amd64 \
     --src-creds "$USER:$PASS" \
