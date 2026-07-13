@@ -2,10 +2,10 @@
 # verify-precise-prefix.sh — 验证精准前缀缓存路由是否正常工作
 #
 # 检测逻辑：
-#   1. ZMQ 连接：EPP 是否成功订阅了 vLLM pod 的 KV 事件 socket
-#   2. token-producer：render service 是否能正常 tokenize（无 404/连接错误）
-#   3. prefix-cache-scorer：EPP 是否在正常处理请求（无 score 0 报错）
-#   4. 端到端：发送相同前缀请求两次，验证路由链路通畅
+#   1. ZMQ 连接：EPP 是否订阅了所有 vLLM pod 的 KV 事件 socket
+#   2. token-producer：render service 是否能正常 tokenize
+#   3. 路由集中性验证（核心）：发 8 次相同前缀请求，观察是否集中路由到同一 pod
+#      通过对比各 pod 的 vllm:prefix_cache_queries_total 增量来判断
 #
 # 注意：EPP 必须在 vLLM pod 之后启动，pod-discovery 才能正确建立 ZMQ 订阅。
 # 若 vLLM pod 重启后精准路由失效，执行：
@@ -27,34 +27,43 @@ echo ""
 
 # ── 0. Pod 状态 ────────────────────────────────────────────────────────────────
 echo "[0] Pod 状态:"
-kubectl get pods -n "${NAMESPACE}" -o wide
+kubectl get pods -n "${NAMESPACE}" -l "llm-d.ai/model=${MODEL}" -o wide
 echo ""
 
-# ── 1. ZMQ 连接检查 ────────────────────────────────────────────────────────────
-echo "[1] ZMQ 连接检查（EPP 是否订阅了 vLLM KV 事件 socket）:"
+# ── 1. ZMQ 连接检查（所有 vLLM pod）─────────────────────────────────────────
+echo "[1] ZMQ 连接检查（EPP 是否订阅了所有 vLLM pod 的 KV 事件 socket）:"
 
-# 获取 vLLM pod IP
-VLLM_POD_IP=$(kubectl get pod -n "${NAMESPACE}" -l "llm-d.ai/model=${MODEL}" \
-  -o jsonpath='{.items[0].status.podIP}' 2>/dev/null)
+VLLM_IPS=$(kubectl get pod -n "${NAMESPACE}" -l "llm-d.ai/model=${MODEL}" \
+  -o jsonpath='{.items[*].status.podIP}' 2>/dev/null)
+VLLM_COUNT=$(echo $VLLM_IPS | wc -w)
 
-if [ -z "$VLLM_POD_IP" ]; then
+if [ -z "$VLLM_IPS" ]; then
   fail "找不到 vLLM pod（label llm-d.ai/model=${MODEL}）"
 else
-  info "vLLM pod IP: ${VLLM_POD_IP}:5556"
-  # 在 EPP 日志中查找 ZMQ 连接记录
+  info "vLLM pod 数量: ${VLLM_COUNT}"
   EPP_POD=$(kubectl get pods -n "${NAMESPACE}" | grep "${GUIDE_NAME}-epp" | grep Running | head -1 | awk '{print $1}')
   if [ -z "$EPP_POD" ]; then
     fail "找不到运行中的 EPP pod"
   else
-    ZMQ_LOG=$(kubectl logs "$EPP_POD" -n "${NAMESPACE}" -c epp 2>/dev/null \
-      | grep "Connected subscriber socket" | grep "${VLLM_POD_IP}:5556" | tail -1)
-    if [ -n "$ZMQ_LOG" ]; then
-      ok "ZMQ 已连接: tcp://${VLLM_POD_IP}:5556"
+    ZMQ_CONNECTED=0
+    for ip in $VLLM_IPS; do
+      ZMQ_LOG=$(kubectl logs "$EPP_POD" -n "${NAMESPACE}" -c epp 2>/dev/null \
+        | grep "Connected subscriber socket" | grep "${ip}:5556" | tail -1)
+      ZMQ_SHUTDOWN=$(kubectl logs "$EPP_POD" -n "${NAMESPACE}" -c epp 2>/dev/null \
+        | grep "shutting down zmq-subscriber" | tail -1)
+      if [ -n "$ZMQ_LOG" ] && [ -z "$ZMQ_SHUTDOWN" ]; then
+        info "ZMQ 已连接: tcp://${ip}:5556"
+        ZMQ_CONNECTED=$((ZMQ_CONNECTED+1))
+      else
+        info "ZMQ 未连接: ${ip}:5556（ZMQ_SHUTDOWN=${ZMQ_SHUTDOWN:+yes}）"
+      fi
+    done
+    if [ "$ZMQ_CONNECTED" -eq "$VLLM_COUNT" ]; then
+      ok "全部 ${VLLM_COUNT} 个 vLLM pod ZMQ 已连接"
+    elif [ "$ZMQ_CONNECTED" -gt 0 ]; then
+      ok "${ZMQ_CONNECTED}/${VLLM_COUNT} 个 pod ZMQ 已连接（部分连接仍可路由）"
     else
-      fail "未找到 ZMQ 连接日志（tcp://${VLLM_POD_IP}:5556）"
-      info "当前 EPP ZMQ 连接记录："
-      kubectl logs "$EPP_POD" -n "${NAMESPACE}" -c epp 2>/dev/null \
-        | grep "Connected subscriber socket" | tail -3 | sed 's/^/    /'
+      fail "所有 pod ZMQ 未连接，请重启 EPP：kubectl rollout restart deployment/${GUIDE_NAME}-epp -n ${NAMESPACE}"
     fi
   fi
 fi
@@ -70,22 +79,27 @@ RENDER_IP=$(kubectl get svc "${RENDER_SVC}" -n "${NAMESPACE}" \
 if [ -z "$RENDER_IP" ]; then
   fail "找不到 svc/${RENDER_SVC}"
 else
-  info "render service: http://${RENDER_IP}:8000"
-  # 检查 render 暴露的模型名
   RENDER_MODEL=$(curl -sf --max-time 5 "http://${RENDER_IP}:8000/v1/models" \
     | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data'][0]['id'])" 2>/dev/null || echo "")
   if [ -z "$RENDER_MODEL" ]; then
     fail "render /v1/models 无响应"
   else
-    info "render 暴露模型名: ${RENDER_MODEL}"
-    # 检查 EPP 日志是否有 token-producer 失败记录（近50条）
     EPP_POD=$(kubectl get pods -n "${NAMESPACE}" | grep "${GUIDE_NAME}-epp" | grep Running | head -1 | awk '{print $1}')
     TOKEN_ERR=$(kubectl logs "$EPP_POD" -n "${NAMESPACE}" -c epp --tail=100 2>/dev/null \
-      | grep '"tokenization failed\|token-producer.*failed\|does not exist"' | tail -3)
+      | python3 -c "
+import sys, json
+for line in sys.stdin:
+    try:
+        d = json.loads(line)
+        msg = d.get('msg','')
+        err = d.get('error','')
+        if 'tokenization failed' in err or ('does not exist' in err and 'token' in str(d).lower()):
+            print(err[:120])
+    except: pass
+" 2>/dev/null | tail -1)
     if [ -n "$TOKEN_ERR" ]; then
-      fail "token-producer 有错误（近期日志）:"
-      echo "$TOKEN_ERR" | sed 's/^/    /'
-      info "提示：render served-model-name 须与 EPP token-producer.modelName 一致（当前 render: ${RENDER_MODEL}）"
+      fail "token-producer 报错（render 模型名不一致）: render=${RENDER_MODEL}"
+      info "$(echo "$TOKEN_ERR" | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(d.get('error','')[:120])" 2>/dev/null)"
     else
       ok "token-producer 正常，render 模型名: ${RENDER_MODEL}"
     fi
@@ -93,106 +107,124 @@ else
 fi
 echo ""
 
-# ── 3. prefix-cache-scorer 索引检查 ────────────────────────────────────────────
-echo "[3] prefix-cache-scorer 索引检查:"
-
-EPP_POD=$(kubectl get pods -n "${NAMESPACE}" | grep "${GUIDE_NAME}-epp" | grep Running | head -1 | awk '{print $1}')
-if [ -n "$EPP_POD" ]; then
-  EPP_IP=$(kubectl get svc "${GUIDE_NAME}-epp" -n "${NAMESPACE}" \
-    -o jsonpath='{.spec.clusterIP}' 2>/dev/null)
-
-  # 发两次相同的长前缀请求，间隔 3s 让 KV 事件传播
-  LONG_PROMPT="请详细解释 Transformer 架构中多头自注意力机制的数学原理，包括 Query Key Value 矩阵的计算方式、Softmax 归一化、缩放点积注意力的完整推导过程"
-  for i in 1 2; do
-    curl -sf --max-time 30 "http://${EPP_IP}/v1/chat/completions" \
-      -H 'Content-Type: application/json' \
-      -d "{\"model\":\"${MODEL}\",\"messages\":[{\"role\":\"user\",\"content\":\"${LONG_PROMPT}\"}],\"max_tokens\":5}" \
-      &>/dev/null || true
-    [ "$i" -eq 1 ] && sleep 3
-  done
-  sleep 1
-
-  # 取最近两次请求日志，检查是否有 score 0
-  RECENT_LOGS=$(kubectl logs "$EPP_POD" -n "${NAMESPACE}" -c epp --tail=20 2>/dev/null)
-  SCORE_ERR=$(echo "$RECENT_LOGS" | grep "PrefixCacheMatchInfo not found" | tail -2)
-  TOKEN_FAIL=$(echo "$RECENT_LOGS" | grep '"failed to prepare per request data"' | tail -1)
-  ZMQ_SHUTDOWN=$(echo "$RECENT_LOGS" | grep "shutting down zmq-subscriber" | tail -1)
-  RECEIVED=$(echo "$RECENT_LOGS" | grep '"EPP received request"' | wc -l)
-
-  if [ -n "$ZMQ_SHUTDOWN" ]; then
-    fail "ZMQ subscriber 已关闭（vLLM pod 可能已重启），请重启 EPP："
-    info "  kubectl rollout restart deployment/${GUIDE_NAME}-epp -n ${NAMESPACE}"
-  elif [ -n "$TOKEN_FAIL" ]; then
-    fail "token-producer 失败，索引无法建立"
-    info "错误: $(echo "$TOKEN_FAIL" | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(d.get('error','')[:100])" 2>/dev/null)"
-  elif [ -n "$SCORE_ERR" ]; then
-    fail "prefix-cache-scorer 持续 score 0（ZMQ 连接正常但 KV 索引未建立）"
-    info "可能原因：EPP 早于 vLLM 启动，请重启 EPP："
-    info "  kubectl rollout restart deployment/${GUIDE_NAME}-epp -n ${NAMESPACE}"
-  else
-    ok "prefix-cache-scorer 正常工作，KV 索引已建立，路由决策正常"
-  fi
-fi
+# ── 3. 路由集中性验证（核心：精准前缀路由生效的决定性证据）────────────────────
+echo "[3] 路由集中性验证（核心检查）:"
+info "原理：相同前缀请求在第一次处理后，EPP 应将后续请求路由到有 KV cache 的 pod"
+info "方法：采集基准值 → 发 8 次相同前缀请求 → 比对各 pod 新增请求数分布"
 echo ""
-
-# ── 4. 端到端：相同前缀两次请求 ───────────────────────────────────────────────
-echo "[4] 端到端前缀命中验证（相同 prompt 发送两次，验证路由链路）:"
 
 EPP_IP=$(kubectl get svc "${GUIDE_NAME}-epp" -n "${NAMESPACE}" \
   -o jsonpath='{.spec.clusterIP}' 2>/dev/null)
+
 if [ -z "$EPP_IP" ]; then
   fail "找不到 svc/${GUIDE_NAME}-epp"
 else
-  PROMPT="请详细解释 Transformer 架构中的自注意力机制，从数学角度说明 Query、Key、Value 矩阵的计算方式，以及 Softmax 归一化的作用"
+  # 采集各 pod 基准值
+  declare -A Q_BEFORE H_BEFORE POD_NODE
+  VLLM_PODS=$(kubectl get pod -n "${NAMESPACE}" -l "llm-d.ai/model=${MODEL}" \
+    -o jsonpath='{range .items[*]}{.metadata.name},{.status.podIP},{.spec.nodeName} {end}' 2>/dev/null)
 
-  info "发送第1次请求..."
-  T1_START=$(date +%s%3N)
-  RESP1=$(curl -sf --max-time 60 "http://${EPP_IP}/v1/chat/completions" \
+  for entry in $VLLM_PODS; do
+    pname=$(echo $entry | cut -d, -f1)
+    pip=$(echo $entry | cut -d, -f2)
+    pnode=$(echo $entry | cut -d, -f3)
+    POD_NODE[$pip]="${pnode}"
+    Q_BEFORE[$pip]=$(curl -sf --max-time 3 "http://${pip}:8000/metrics" 2>/dev/null \
+      | grep "^vllm:prefix_cache_queries_total{" | awk '{print $2+0}')
+    H_BEFORE[$pip]=$(curl -sf --max-time 3 "http://${pip}:8000/metrics" 2>/dev/null \
+      | grep "^vllm:prefix_cache_hits_total{" | awk '{print $2+0}')
+    info "基准 ${pnode}(${pip}): queries=${Q_BEFORE[$pip]} hits=${H_BEFORE[$pip]}"
+  done
+
+  # 先发一次请求建立初始 KV cache
+  LONG_PREFIX="请你详细解释 Transformer 架构中多头自注意力机制的数学原理，包括 Query Key Value 矩阵的计算方式、Softmax 归一化、缩放点积注意力的完整推导过程，以及为什么要除以根号 dk，还有位置编码的作用。"
+  curl -sf --max-time 60 "http://${EPP_IP}/v1/chat/completions" \
     -H 'Content-Type: application/json' \
-    -d "{\"model\":\"${MODEL}\",\"messages\":[{\"role\":\"user\",\"content\":\"${PROMPT}\"}],\"max_tokens\":20}" 2>&1)
-  T1_END=$(date +%s%3N)
-  T1=$((T1_END - T1_START))
+    -d "{\"model\":\"${MODEL}\",\"messages\":[{\"role\":\"user\",\"content\":\"${LONG_PREFIX}\"}],\"max_tokens\":10}" \
+    &>/dev/null || true
+  sleep 3  # 等 KV 事件传播
 
-  if ! echo "${RESP1}" | grep -q '"finish_reason"'; then
-    fail "第1次请求失败: $(echo $RESP1 | cut -c1-100)"
-  else
-    info "第1次耗时: ${T1}ms"
-    sleep 3  # 等待 KV 事件传播到 EPP 索引
-
-    info "发送第2次请求（相同前缀）..."
-    T2_START=$(date +%s%3N)
-    RESP2=$(curl -sf --max-time 60 "http://${EPP_IP}/v1/chat/completions" \
+  # 发 8 次相同请求
+  info "发送 8 次相同前缀请求..."
+  for i in $(seq 1 8); do
+    curl -sf --max-time 60 "http://${EPP_IP}/v1/chat/completions" \
       -H 'Content-Type: application/json' \
-      -d "{\"model\":\"${MODEL}\",\"messages\":[{\"role\":\"user\",\"content\":\"${PROMPT}\"}],\"max_tokens\":20}" 2>&1)
-    T2_END=$(date +%s%3N)
-    T2=$((T2_END - T2_START))
+      -d "{\"model\":\"${MODEL}\",\"messages\":[{\"role\":\"user\",\"content\":\"${LONG_PREFIX}\"}],\"max_tokens\":10}" \
+      &>/dev/null || true
+    echo -n "."
+    sleep 1
+  done
+  echo ""
+  sleep 2
 
-    if ! echo "${RESP2}" | grep -q '"finish_reason"'; then
-      fail "第2次请求失败: $(echo $RESP2 | cut -c1-100)"
+  # 采集测试后值并分析
+  declare -A Q_AFTER H_AFTER Q_DELTA H_DELTA
+  TOTAL_NEW=0
+  MAX_NEW=0
+  MAX_IP=""
+
+  for entry in $VLLM_PODS; do
+    pip=$(echo $entry | cut -d, -f2)
+    Q_AFTER[$pip]=$(curl -sf --max-time 3 "http://${pip}:8000/metrics" 2>/dev/null \
+      | grep "^vllm:prefix_cache_queries_total{" | awk '{print $2+0}')
+    H_AFTER[$pip]=$(curl -sf --max-time 3 "http://${pip}:8000/metrics" 2>/dev/null \
+      | grep "^vllm:prefix_cache_hits_total{" | awk '{print $2+0}')
+    Q_DELTA[$pip]=$(echo "${Q_AFTER[$pip]} ${Q_BEFORE[$pip]}" | awk '{print $1-$2}')
+    H_DELTA[$pip]=$(echo "${H_AFTER[$pip]} ${H_BEFORE[$pip]}" | awk '{print $1-$2}')
+    TOTAL_NEW=$((TOTAL_NEW + ${Q_DELTA[$pip]%.*}))
+    if [ "${Q_DELTA[$pip]%.*}" -gt "$MAX_NEW" ]; then
+      MAX_NEW="${Q_DELTA[$pip]%.*}"
+      MAX_IP="$pip"
+    fi
+  done
+
+  echo ""
+  info "请求分布结果："
+  for entry in $VLLM_PODS; do
+    pip=$(echo $entry | cut -d, -f2)
+    qd=${Q_DELTA[$pip]%.*}
+    hd=${H_DELTA[$pip]%.*}
+    node=${POD_NODE[$pip]}
+    if [ "$qd" -gt 0 ]; then
+      hit_pct=$(echo "$hd $qd" | awk '{printf "%.1f", $1/$2*100}')
+      info "  ${node}(${pip}): 新增 ${qd} 条，命中 ${hd} 条（命中率 ${hit_pct}%）"
     else
-      info "第2次耗时: ${T2}ms"
-      ok "两次请求均成功，端到端路由链路正常"
-      if [ "$T2" -lt "$T1" ]; then
-        info "第2次更快 (${T2}ms < ${T1}ms)，vLLM 内部前缀缓存命中"
-      fi
+      info "  ${node}(${pip}): 新增 0 条"
+    fi
+  done
+
+  echo ""
+  if [ "$TOTAL_NEW" -eq 0 ]; then
+    fail "无法获取各 pod 请求增量，metrics 可能不可达"
+  else
+    RATIO=$(echo "$MAX_NEW $TOTAL_NEW" | awk '{printf "%d", $1/$2*100}')
+    if [ "$RATIO" -ge 88 ]; then
+      ok "路由高度集中：${MAX_NEW}/${TOTAL_NEW} 条路由到 ${POD_NODE[$MAX_IP]}（${RATIO}%）"
+      ok "精准前缀路由生效 — EPP 将相同前缀的请求集中路由到有 KV cache 的 pod"
+    elif [ "$RATIO" -ge 60 ]; then
+      ok "路由明显倾向：${MAX_NEW}/${TOTAL_NEW} 条路由到 ${POD_NODE[$MAX_IP]}（${RATIO}%）"
+      info "倾向明显但不绝对，符合多因素加权评分（prefix × 3 + queue × 2 + kv-util × 2）的预期"
+    else
+      fail "请求均匀分布（最大集中度 ${RATIO}%），精准前缀路由未生效"
+      info "检查：1) EPP 是否在 vLLM 之后启动  2) ZMQ 是否收到 KV 事件  3) token-producer 是否正常"
     fi
   fi
 fi
 echo ""
 
-# ── 5. 近期 EPP 日志快照 ────────────────────────────────────────────────────────
-echo "[5] 近期 EPP 路由日志（最新5条请求）:"
+# ── 4. 近期 EPP 日志快照 ────────────────────────────────────────────────────────
+echo "[4] 近期 EPP 路由日志（最新5条）:"
 EPP_POD=$(kubectl get pods -n "${NAMESPACE}" | grep "${GUIDE_NAME}-epp" | grep Running | head -1 | awk '{print $1}')
-kubectl logs "$EPP_POD" -n "${NAMESPACE}" -c epp --tail=200 2>/dev/null \
-  | grep '"EPP received request"\|"EPP sent request body"' \
+kubectl logs "$EPP_POD" -n "${NAMESPACE}" -c epp --tail=100 2>/dev/null \
+  | grep '"EPP received request"' \
   | tail -5 | python3 -c "
 import sys, json
 for line in sys.stdin:
     try:
         d = json.loads(line)
-        print(f\"  {d.get('msg','')} | req={d.get('x-request-id','')[:8]}... model={d.get('modelName','')}\")
+        print(f\"  req={d.get('x-request-id','')[:12]}...\")
     except:
-        print(' ', line.strip()[:100])
+        print(' ', line.strip()[:80])
 " 2>/dev/null || true
 
 echo ""
