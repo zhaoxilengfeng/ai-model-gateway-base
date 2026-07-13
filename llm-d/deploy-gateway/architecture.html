@@ -1,0 +1,694 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>llm-d Gateway 架构图</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    background: #0f1117;
+    color: #e2e8f0;
+    min-height: 100vh;
+    padding: 32px 24px;
+  }
+
+  h1 {
+    text-align: center;
+    font-size: 22px;
+    font-weight: 700;
+    color: #f8fafc;
+    margin-bottom: 6px;
+    letter-spacing: 0.5px;
+  }
+  .subtitle {
+    text-align: center;
+    font-size: 13px;
+    color: #64748b;
+    margin-bottom: 36px;
+  }
+
+  /* ── Layout ── */
+  .diagram {
+    max-width: 1100px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+
+  /* ── Request flow label ── */
+  .flow-label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: #475569;
+    margin-bottom: 12px;
+    padding-left: 4px;
+  }
+
+  /* ── Namespace boxes ── */
+  .ns-box {
+    border-radius: 14px;
+    border: 1.5px solid;
+    padding: 18px 20px 20px;
+    position: relative;
+    margin-bottom: 0;
+  }
+  .ns-box.external {
+    border-color: #334155;
+    background: #161b27;
+    margin-bottom: 16px;
+  }
+  .ns-box.agentgw-system {
+    border-color: #7c3aed44;
+    background: #1a1340;
+    margin-bottom: 16px;
+  }
+  .ns-box.llmd-gw {
+    border-color: #0369a144;
+    background: #071a2e;
+  }
+
+  .ns-label {
+    position: absolute;
+    top: -11px;
+    left: 16px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.8px;
+    padding: 1px 10px;
+    border-radius: 20px;
+    text-transform: uppercase;
+  }
+  .agentgw-system .ns-label { background: #7c3aed; color: #fff; }
+  .llmd-gw .ns-label { background: #0369a1; color: #fff; }
+  .external .ns-label { background: #334155; color: #94a3b8; }
+
+  /* ── Row layout inside ns ── */
+  .row {
+    display: flex;
+    align-items: stretch;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  .row.center { justify-content: center; }
+  .row.spread { justify-content: space-between; }
+
+  /* ── Component cards ── */
+  .card {
+    border-radius: 10px;
+    border: 1.5px solid;
+    padding: 14px 16px;
+    min-width: 160px;
+    flex: 1;
+    position: relative;
+    transition: transform 0.15s, box-shadow 0.15s;
+    cursor: default;
+  }
+  .card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  }
+
+  /* card themes */
+  .card.client {
+    border-color: #475569;
+    background: #1e293b;
+    min-width: 100px;
+    flex: 0;
+  }
+  .card.controller {
+    border-color: #7c3aed88;
+    background: #1f1550;
+  }
+  .card.proxy {
+    border-color: #8b5cf688;
+    background: #1e1545;
+  }
+  .card.gateway-res {
+    border-color: #6366f188;
+    background: #1a1a40;
+  }
+  .card.epp {
+    border-color: #0891b288;
+    background: #072a38;
+  }
+  .card.vllm {
+    border-color: #16a34a88;
+    background: #071f12;
+  }
+  .card.svc {
+    border-color: #d9770688;
+    background: #1f1408;
+    min-width: 130px;
+  }
+  .card.crd {
+    border-color: #64748b55;
+    background: #1a2030;
+    flex: 0;
+    min-width: 140px;
+  }
+  .card.gatewayclass {
+    border-color: #a855f788;
+    background: #1e1040;
+    flex: 0;
+    min-width: 160px;
+  }
+
+  .card-icon { font-size: 20px; margin-bottom: 6px; }
+  .card-name {
+    font-size: 13px;
+    font-weight: 700;
+    color: #f1f5f9;
+    margin-bottom: 3px;
+  }
+  .card-kind {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.6px;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+    opacity: 0.6;
+  }
+  .card-detail {
+    font-size: 11px;
+    color: #94a3b8;
+    line-height: 1.5;
+  }
+  .card-detail code {
+    font-family: 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 10px;
+    background: rgba(255,255,255,0.06);
+    padding: 1px 5px;
+    border-radius: 4px;
+    color: #c4b5fd;
+  }
+  .tag {
+    display: inline-block;
+    font-size: 9.5px;
+    font-weight: 600;
+    padding: 1px 6px;
+    border-radius: 10px;
+    margin-top: 5px;
+    margin-right: 3px;
+  }
+  .tag.green { background: #14532d55; color: #4ade80; border: 1px solid #16a34a55; }
+  .tag.blue  { background: #1e3a5f55; color: #60a5fa; border: 1px solid #2563eb55; }
+  .tag.purple{ background: #3b1d6055; color: #c084fc; border: 1px solid #7c3aed55; }
+  .tag.orange{ background: #431d0055; color: #fb923c; border: 1px solid #ea580c55; }
+
+  /* ── Arrows / connectors ── */
+  .connector {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 6px 0;
+    position: relative;
+  }
+  .connector.vertical {
+    flex-direction: column;
+    padding: 4px 0;
+  }
+  .arrow-line {
+    flex: 1;
+    height: 2px;
+    background: linear-gradient(90deg, #334155, #475569);
+    position: relative;
+  }
+  .arrow-line::after {
+    content: '';
+    position: absolute;
+    right: -1px;
+    top: -4px;
+    width: 0;
+    height: 0;
+    border-top: 5px solid transparent;
+    border-bottom: 5px solid transparent;
+    border-left: 8px solid #475569;
+  }
+  .arrow-down {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 6px 0;
+    gap: 0;
+  }
+  .arrow-down .line {
+    width: 2px;
+    height: 28px;
+    background: linear-gradient(180deg, #334155, #475569);
+  }
+  .arrow-down .tip {
+    width: 0; height: 0;
+    border-left: 6px solid transparent;
+    border-right: 6px solid transparent;
+    border-top: 9px solid #475569;
+  }
+
+  /* colored arrows for request path */
+  .arrow-req .line { background: linear-gradient(180deg, #3b82f6, #6366f1); }
+  .arrow-req .tip  { border-top-color: #6366f1; }
+
+  .arrow-xds .line { background: linear-gradient(180deg, #7c3aed88, #7c3aed44); }
+  .arrow-xds .tip  { border-top-color: #7c3aed66; }
+
+  .conn-label {
+    font-size: 10px;
+    color: #64748b;
+    font-weight: 600;
+    letter-spacing: 0.4px;
+    white-space: nowrap;
+    padding: 0 8px;
+  }
+
+  /* ── Section separators inside ns ── */
+  .section-gap { height: 16px; }
+
+  /* ── Legend ── */
+  .legend {
+    max-width: 1100px;
+    margin: 24px auto 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 24px;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 11px;
+    color: #94a3b8;
+  }
+  .legend-dot {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  /* ── Request flow steps ── */
+  .flow-steps {
+    max-width: 1100px;
+    margin: 28px auto 0;
+    background: #161b27;
+    border: 1.5px solid #1e293b;
+    border-radius: 14px;
+    padding: 20px 24px;
+  }
+  .flow-steps h2 {
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: #64748b;
+    margin-bottom: 16px;
+  }
+  .flow-step {
+    display: flex;
+    gap: 14px;
+    margin-bottom: 12px;
+    align-items: flex-start;
+  }
+  .step-num {
+    width: 22px; height: 22px;
+    border-radius: 50%;
+    background: #1e3a5f;
+    border: 1.5px solid #3b82f6;
+    color: #60a5fa;
+    font-size: 11px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    margin-top: 1px;
+  }
+  .step-text {
+    font-size: 12px;
+    color: #94a3b8;
+    line-height: 1.6;
+  }
+  .step-text strong { color: #e2e8f0; }
+
+  /* ── two-col for ns boxes ── */
+  .agentgw-inner {
+    display: flex;
+    gap: 16px;
+    align-items: flex-start;
+  }
+  .agentgw-inner .left { flex: 1.2; }
+  .agentgw-inner .right { flex: 0.8; }
+  .xds-label {
+    writing-mode: vertical-rl;
+    font-size: 9px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: #7c3aed88;
+    font-weight: 700;
+    align-self: center;
+    padding: 0 4px;
+  }
+</style>
+</head>
+<body>
+
+<h1>llm-d Gateway 模式架构</h1>
+<p class="subtitle">agentgateway v1.3.1 · llm-d-router-gateway v0.9.0 · vLLM v0.23.0</p>
+
+<div class="diagram">
+
+  <!-- ── External Client ── -->
+  <div class="ns-box external">
+    <span class="ns-label">外部访问</span>
+    <div class="row center">
+      <div class="card client">
+        <div class="card-icon">💻</div>
+        <div class="card-name">Client</div>
+        <div class="card-detail">OpenAI 兼容 API</div>
+      </div>
+      <div style="flex:1; display:flex; align-items:center; gap:6px; min-width:200px;">
+        <div class="arrow-line" style="background:linear-gradient(90deg,#3b82f6,#6366f1);">
+          <div style="position:absolute;right:-1px;top:-4px;width:0;height:0;border-top:5px solid transparent;border-bottom:5px solid transparent;border-left:8px solid #6366f1;"></div>
+        </div>
+        <div style="font-size:10px;color:#64748b;white-space:nowrap;">NodePort<br><code style="font-size:10px;background:rgba(255,255,255,0.06);padding:1px 5px;border-radius:4px;color:#60a5fa;">:32212</code></div>
+        <div class="arrow-line" style="background:linear-gradient(90deg,#6366f1,#8b5cf6);">
+          <div style="position:absolute;right:-1px;top:-4px;width:0;height:0;border-top:5px solid transparent;border-bottom:5px solid transparent;border-left:8px solid #8b5cf6;"></div>
+        </div>
+      </div>
+      <div class="card svc" style="flex:0; min-width:180px;">
+        <div class="card-icon">🔀</div>
+        <div class="card-name">svc/llm-d-inference-gateway</div>
+        <div class="card-kind">Service · LoadBalancer</div>
+        <div class="card-detail">
+          <code>80:32212/TCP</code><br>
+          <span class="tag orange">自动生成</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- arrow down -->
+  <div style="display:flex;justify-content:center;">
+    <div class="arrow-down arrow-req">
+      <div class="line"></div><div class="tip"></div>
+    </div>
+  </div>
+
+  <!-- ── Namespace: agentgateway-system ── -->
+  <div class="ns-box agentgw-system">
+    <span class="ns-label">agentgateway-system</span>
+
+    <div class="agentgw-inner">
+
+      <!-- left: controller -->
+      <div class="left">
+        <div class="card controller" style="margin-bottom:12px;">
+          <div class="card-icon">🎛️</div>
+          <div class="card-name">agentgateway controller</div>
+          <div class="card-kind">Deployment</div>
+          <div class="card-detail">
+            <code>cr.agentgateway.dev/controller:v1.3.1</code><br><br>
+            监听集群中 Gateway / HTTPRoute / InferencePool 变化<br>
+            通过 xDS gRPC 将路由配置下发给 proxy<br>
+            发现 Gateway 对象时，自动创建 proxy Deployment + Service
+          </div>
+          <div>
+            <span class="tag purple">控制面</span>
+            <span class="tag blue">xDS gRPC :9978</span>
+          </div>
+        </div>
+
+        <div class="card gatewayclass">
+          <div class="card-icon">🏷️</div>
+          <div class="card-name">GatewayClass</div>
+          <div class="card-kind">集群级资源</div>
+          <div class="card-detail">
+            name: <code>agentgateway</code><br>
+            controllerName: <code>agentgateway.dev/agentgateway</code><br><br>
+            注册 agentgateway 实现，所有引用此 class 的 Gateway 均由 controller 管理
+          </div>
+        </div>
+      </div>
+
+      <!-- xds arrow -->
+      <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;padding:0 4px;">
+        <div class="xds-label">xDS · TLS</div>
+        <div style="width:2px;flex:1;background:linear-gradient(180deg,#7c3aed66,#7c3aed33);border-radius:2px;"></div>
+        <div style="color:#7c3aed66;font-size:14px;">▼</div>
+      </div>
+
+      <!-- right: proxy -->
+      <div class="right">
+        <div class="card proxy">
+          <div class="card-icon">🔄</div>
+          <div class="card-name">agentgateway proxy</div>
+          <div class="card-kind">Deployment · 数据面（自动生成）</div>
+          <div class="card-detail">
+            <code>cr.agentgateway.dev/agentgateway:v1.3.1</code><br><br>
+            实际接收并转发 HTTP 流量<br>
+            根据 HTTPRoute 规则将请求路由到 InferencePool<br>
+            <span style="color:#64748b;">部署在 llm-d-gateway namespace</span>
+          </div>
+          <div>
+            <span class="tag orange">数据面</span>
+            <span class="tag purple">自动生成</span>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- arrow down -->
+  <div style="display:flex;justify-content:center;">
+    <div class="arrow-down arrow-req">
+      <div class="line"></div><div class="tip"></div>
+    </div>
+  </div>
+
+  <!-- ── Namespace: llm-d-gateway ── -->
+  <div class="ns-box llmd-gw">
+    <span class="ns-label">llm-d-gateway</span>
+
+    <!-- Gateway resource -->
+    <div class="row" style="margin-bottom:14px;">
+      <div class="card gateway-res">
+        <div class="card-icon">🚪</div>
+        <div class="card-name">Gateway / llm-d-inference-gateway</div>
+        <div class="card-kind">gateway.networking.k8s.io/v1</div>
+        <div class="card-detail">
+          gatewayClassName: <code>agentgateway</code><br>
+          listener: <code>port 80 · HTTP · from All</code><br><br>
+          controller 发现此对象后，自动在本 namespace 创建 proxy Deployment + LoadBalancer Service
+        </div>
+        <div>
+          <span class="tag blue">Programmed ✓</span>
+          <span class="tag purple">kustomize 创建</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- HTTPRoute -->
+    <div class="row" style="margin-bottom:6px;">
+      <div class="card gateway-res" style="border-color:#a78bfa88;background:#1c1840;">
+        <div class="card-icon">🗺️</div>
+        <div class="card-name">HTTPRoute / quickstart</div>
+        <div class="card-kind">gateway.networking.k8s.io/v1</div>
+        <div class="card-detail">
+          parentRef → <code>Gateway/llm-d-inference-gateway</code><br>
+          match: <code>path prefix /</code><br>
+          backendRef → <code>InferencePool/quickstart</code><br>
+          timeout: <code>300s</code>
+        </div>
+        <div><span class="tag blue">helm 创建</span></div>
+      </div>
+    </div>
+
+    <!-- arrow down -->
+    <div style="display:flex;justify-content:center;">
+      <div class="arrow-down arrow-req">
+        <div class="line" style="height:18px;"></div><div class="tip"></div>
+      </div>
+    </div>
+
+    <!-- InferencePool -->
+    <div class="row" style="margin-bottom:6px;">
+      <div class="card epp" style="border-color:#0e7490aa;background:#052030;">
+        <div class="card-icon">🎯</div>
+        <div class="card-name">InferencePool / quickstart</div>
+        <div class="card-kind">inference.networking.k8s.io/v1</div>
+        <div class="card-detail">
+          selector: <code>llm-d.ai/guide=optimized-baseline</code><br>
+          targetPort: <code>8000</code><br>
+          endpointPickerRef → <code>svc/quickstart-epp:9002</code><br>
+          failureMode: <code>FailOpen</code>（EPP 故障时随机转发）
+        </div>
+        <div><span class="tag blue">GIE 资源</span><span class="tag blue">helm 创建</span></div>
+      </div>
+    </div>
+
+    <!-- arrow down to EPP -->
+    <div style="display:flex;justify-content:center;align-items:center;gap:24px;padding:4px 0;">
+      <div style="font-size:10px;color:#0891b2;opacity:0.7;white-space:nowrap;">选路请求 gRPC</div>
+      <div class="arrow-down arrow-req">
+        <div class="line" style="height:18px;background:linear-gradient(180deg,#0891b2,#0e7490);"></div>
+        <div class="tip" style="border-top-color:#0e7490;"></div>
+      </div>
+      <div style="font-size:10px;color:#0891b2;opacity:0.7;white-space:nowrap;">返回最优 pod IP</div>
+    </div>
+
+    <!-- EPP + vLLM row -->
+    <div class="row spread">
+
+      <!-- EPP card -->
+      <div class="card epp" style="flex:1.1;">
+        <div class="card-icon">🧠</div>
+        <div class="card-name">quickstart-epp</div>
+        <div class="card-kind">Deployment · Endpoint Picker</div>
+        <div class="card-detail">
+          <code>ghcr.io/llm-d/llm-d-router-endpoint-picker:v0.9.0</code><br><br>
+          监听所有 <code>llm-d.ai/guide=optimized-baseline</code> pod<br>
+          收集每个 pod 的 KV Cache、队列、前缀缓存指标<br>
+          加权评分选出最优 vLLM 实例，返回其 pod IP 给 proxy<br><br>
+          调度插件（<code>optimized-baseline</code>）：<br>
+          • <code>prefix-cache-scorer</code>（权重 3）<br>
+          • <code>queue-scorer</code>（权重 2）<br>
+          • <code>kv-cache-utilization-scorer</code>（权重 2）<br>
+          • <code>no-hit-lru-scorer</code>（权重 2）
+        </div>
+        <div>
+          <span class="tag blue">:9002 gRPC</span>
+          <span class="tag blue">:9090 metrics</span>
+        </div>
+        <!-- svc below -->
+        <div style="margin-top:12px;padding-top:10px;border-top:1px solid #0891b222;">
+          <div style="font-size:10px;color:#64748b;font-weight:600;margin-bottom:4px;">SERVICE</div>
+          <div class="card-detail"><code>svc/quickstart-epp</code> · ClusterIP<br>
+          9002/TCP · 9090/TCP · 80/TCP</div>
+        </div>
+      </div>
+
+      <!-- arrow right -->
+      <div style="display:flex;align-items:center;padding:0 4px;">
+        <div style="display:flex;flex-direction:column;align-items:center;gap:4px;">
+          <div style="font-size:10px;color:#16a34a;opacity:0.8;white-space:nowrap;">直连 pod IP</div>
+          <div style="width:60px;height:2px;background:linear-gradient(90deg,#0891b2,#16a34a);position:relative;">
+            <div style="position:absolute;right:-1px;top:-4px;width:0;height:0;border-top:5px solid transparent;border-bottom:5px solid transparent;border-left:8px solid #16a34a;"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- vLLM card -->
+      <div class="card vllm" style="flex:1.1;">
+        <div class="card-icon">⚡</div>
+        <div class="card-name">qwen25-7b-instruct</div>
+        <div class="card-kind">Deployment · vLLM 推理服务</div>
+        <div class="card-detail">
+          <code>vllm/vllm-openai:v0.23.0</code><br><br>
+          Labels：<code>llm-d.ai/guide=optimized-baseline</code><br>
+          &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<code>llm-d.ai/model=qwen25-7b-instruct</code><br><br>
+          GPU: <code>nvidia.com/gpu: 1</code><br>
+          启动参数：<br>
+          • <code>--enable-prefix-caching</code><br>
+          • <code>--max-model-len=8192</code><br>
+          • <code>--gpu-memory-utilization=0.85</code><br>
+          • <code>HF_HUB_OFFLINE=1</code>（离线模式）<br><br>
+          模型：hostPath <code>/root/models</code> 挂载
+        </div>
+        <div>
+          <span class="tag green">:8000 OpenAI API</span>
+          <span class="tag green">GPU Ready ✓</span>
+        </div>
+        <!-- svc below -->
+        <div style="margin-top:12px;padding-top:10px;border-top:1px solid #16a34a22;">
+          <div style="font-size:10px;color:#64748b;font-weight:600;margin-bottom:4px;">SERVICE</div>
+          <div class="card-detail"><code>svc/qwen25-7b-instruct</code> · ClusterIP<br>
+          selector: <code>llm-d.ai/model=qwen25-7b-instruct</code></div>
+        </div>
+      </div>
+
+    </div>
+
+  </div><!-- end llmd-gw -->
+
+</div><!-- end diagram -->
+
+<!-- ── Request Flow Steps ── -->
+<div class="flow-steps">
+  <h2>📋 请求完整路径</h2>
+
+  <div class="flow-step">
+    <div class="step-num">1</div>
+    <div class="step-text">
+      <strong>Client → NodePort :32212</strong><br>
+      外部客户端发送 OpenAI 兼容 HTTP 请求，打到任意 worker 节点的 NodePort（当前 32212）
+    </div>
+  </div>
+  <div class="flow-step">
+    <div class="step-num">2</div>
+    <div class="step-text">
+      <strong>NodePort → svc/llm-d-inference-gateway → agentgateway proxy pod</strong><br>
+      Service 将请求转发到 agentgateway proxy pod（数据面），该 pod 由 agentgateway controller 自动创建
+    </div>
+  </div>
+  <div class="flow-step">
+    <div class="step-num">3</div>
+    <div class="step-text">
+      <strong>proxy 匹配 HTTPRoute</strong><br>
+      proxy 根据从 controller 获得的 xDS 配置，匹配 HTTPRoute/quickstart（path prefix /），确认转发目标为 InferencePool/quickstart
+    </div>
+  </div>
+  <div class="flow-step">
+    <div class="step-num">4</div>
+    <div class="step-text">
+      <strong>InferencePool → EPP 选路（gRPC :9002）</strong><br>
+      proxy 调用 EPP（quickstart-epp）的 gRPC 接口，EPP 根据各 vLLM pod 的 KV Cache 利用率、请求队列、前缀缓存命中率加权打分，返回最优 pod 的 IP 地址
+    </div>
+  </div>
+  <div class="flow-step">
+    <div class="step-num">5</div>
+    <div class="step-text">
+      <strong>proxy 直连 vLLM pod :8000</strong><br>
+      proxy 拿到 EPP 返回的 pod IP，直接将请求转发到该 vLLM pod 的 8000 端口，完成推理，结果原路返回
+    </div>
+  </div>
+</div>
+
+<!-- ── Control Plane Note ── -->
+<div class="flow-steps" style="margin-top:16px;">
+  <h2>🎛️ 控制面工作机制</h2>
+  <div class="flow-step">
+    <div class="step-num" style="background:#2e1065;border-color:#7c3aed;color:#c084fc;">C</div>
+    <div class="step-text">
+      <strong>agentgateway controller 启动</strong> → 注册 GatewayClass <code>agentgateway</code>，开始监听集群资源变化
+    </div>
+  </div>
+  <div class="flow-step">
+    <div class="step-num" style="background:#2e1065;border-color:#7c3aed;color:#c084fc;">C</div>
+    <div class="step-text">
+      <strong>发现 Gateway/llm-d-inference-gateway</strong> → 自动在 <code>llm-d-gateway</code> namespace 中创建 proxy Deployment、LoadBalancer Service、ConfigMap（proxy 配置）、Secret（session key）
+    </div>
+  </div>
+  <div class="flow-step">
+    <div class="step-num" style="background:#2e1065;border-color:#7c3aed;color:#c084fc;">C</div>
+    <div class="step-text">
+      <strong>发现 HTTPRoute + InferencePool</strong> → 通过 xDS gRPC（TLS）将路由规则实时下发给 proxy pod，无需重启
+    </div>
+  </div>
+</div>
+
+<!-- ── Legend ── -->
+<div class="legend">
+  <div class="legend-item"><div class="legend-dot" style="background:#7c3aed;"></div>控制面 / agentgateway-system</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#6366f1;"></div>Gateway API 资源（GatewayClass / Gateway / HTTPRoute）</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#0891b2;"></div>GIE 资源（InferencePool）/ EPP</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#16a34a;"></div>vLLM 推理服务</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#d97706;"></div>Service（流量入口）</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#8b5cf6;"></div>agentgateway proxy（自动生成）</div>
+</div>
+
+</body>
+</html>
