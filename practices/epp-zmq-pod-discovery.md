@@ -5,9 +5,10 @@
 | 操作 | K8s 事件 | EPP 行为 | 是否需要重启 EPP |
 |---|---|---|---|
 | `kubectl scale` 扩容新 pod | ADD | 自动发现，自动建立 ZMQ 订阅 | ❌ 不需要 |
-| `kubectl rollout restart` pod 重启 | UPDATE（name 同，IP 变）| 旧 subscriber shutdown，不重建 | ✅ 需要 |
-| 节点故障，pod 漂移到新节点 | DELETE + ADD | 旧 subscriber shutdown；新 pod ADD 时自动重建 | ❌ 不需要（漂移） |
-| EPP 先于 vLLM 启动 | 启动时 List 存量 pod | 正常，EPP 启动时会 List 所有已有 pod | ❌ 不需要 |
+| `kubectl delete pod`（Deployment 重建）| DELETE + ADD | 旧连接断开；新 pod ADD 时自动重建 | ❌ 不需要 |
+| `kubectl rollout restart`（滚动替换）| UPDATE（name 同，IP 变）| 视时序而定，可能不重建 | ⚠️ 若 score 0 持续则需要 |
+| 节点故障，pod 漂移 | DELETE + ADD | 同 delete pod，自动恢复 | ❌ 不需要 |
+| EPP 先于 vLLM 启动 | 启动时 List 存量 pod | 正常，自动连接 | ❌ 不需要 |
 
 ---
 
@@ -58,39 +59,34 @@ Connected subscriber socket  endpoint=tcp://10.244.142.240:5556
 
 实测（3 个 pod 场景）：EPP 在新 pod Ready 后几秒内自动连接，无需任何手动干预，精准路由对 3 个 pod 全部生效。
 
-### 场景二：pod 原地重启（IP 变化）❌ 需要重启 EPP
+### 场景二：pod 重启（DELETE + ADD，如 kubectl delete pod）✅ 自动
+
+直接删除 pod，Deployment controller 会创建一个全新的 pod（新 name 或同 name 新 IP）。
+
+- DELETE：EPP 清理旧 IP 的 ZMQ subscriber（`shutting down zmq-subscriber`）
+- ADD（新 pod Ready）：EPP `pod_reconciler` 收到 ADD 事件，自动建立新 ZMQ 连接
+
+**实测**：删除 pod 后，新 pod Ready，EPP 自动重连，无需手动干预。
+
+### 场景三：滚动替换（kubectl rollout restart）⚠️ 视时序而定
+
+`rollout restart` 是滚动更新，逐一替换 pod。每个旧 pod 会先触发 UPDATE（标记为 Terminating），再触发 DELETE，然后新 pod 触发 ADD。
+
+实践中行为取决于 EPP 处理 UPDATE 事件的时序：
+- 若 EPP 在收到 DELETE 前已处理 UPDATE 并 shutdown 旧连接，新 pod ADD 时会重建
+- 若出现 ZMQ 断连但未恢复（表现为精准路由 score 0 持续），重启 EPP 即可
+
+**验证方式**：
 
 ```bash
-kubectl rollout restart deployment/qwen25-7b-instruct -n llm-d-precise-prefix
+bash /root/ai-model-gateway-base/llm-d/deploy-precise-prefix/verify-precise-prefix.sh
 ```
 
-pod NamespacedName 不变，但 IP 变化。EPP `pod_reconciler` 收到 UPDATE 事件：
-1. 检测到 "Pod already exists"，认为是同一个 pod
-2. shutdown 旧 IP 的 ZMQ subscriber
-3. **不会**用新 IP 重建 subscriber
-4. 结果：EPP 与该 pod 的 ZMQ 连接断开，prefix-cache-scorer 持续 score 0
+若 Check 3 路由集中度 < 60%，执行：
 
-**EPP 日志特征**：
-```
-shutting down zmq-subscriber
-```
-之后无 "Connected subscriber socket" 日志。
-
-**修复**：
 ```bash
 kubectl rollout restart deployment/precise-prefix-cache-routing-epp -n llm-d-precise-prefix
 ```
-
-EPP 重启后通过初始 List 获取所有存量 pod，对每个 pod 触发 reconcile，重新建立 ZMQ 连接。
-
-### 场景三：节点故障，pod 漂移 ✅ 自动
-
-节点宕机时，pod 先触发 DELETE 事件（旧 pod 被删除），再触发 ADD 事件（新 pod 在其他节点创建）。
-
-- DELETE：EPP 清理旧 IP 的 ZMQ subscriber
-- ADD：EPP 对新 pod（新 IP）自动建立 ZMQ 连接
-
-整个过程自动完成，但漂移期间（新 pod 启动过程中）该 pod 暂时不在索引中，EPP 会对其 score 0，请求会被路由到其他 pod。
 
 ### 场景四：EPP 先于 vLLM 启动 ✅ 自动
 

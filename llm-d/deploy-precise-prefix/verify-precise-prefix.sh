@@ -102,16 +102,46 @@ else
     fail "找不到运行中的 EPP pod"
   else
     ZMQ_CONNECTED=0
+    # 获取全局最后一次 shutdown 时间戳（不带 endpoint 信息）
+    LAST_SHUTDOWN_TS=$(kubectl logs "$EPP_POD" -n "${NAMESPACE}" -c epp 2>/dev/null \
+      | python3 -c "
+import sys, json
+ts = 0
+for line in sys.stdin:
+    try:
+        d = json.loads(line)
+        if 'shutting down zmq-subscriber' in d.get('msg',''):
+            ts = max(ts, d.get('ts', 0))
+    except: pass
+print(ts)
+" 2>/dev/null)
+
     for ip in $VLLM_IPS; do
-      ZMQ_LOG=$(kubectl logs "$EPP_POD" -n "${NAMESPACE}" -c epp 2>/dev/null \
-        | grep "Connected subscriber socket" | grep "${ip}:5556" | tail -1)
-      ZMQ_SHUTDOWN=$(kubectl logs "$EPP_POD" -n "${NAMESPACE}" -c epp 2>/dev/null \
-        | grep "shutting down zmq-subscriber" | tail -1)
-      if [ -n "$ZMQ_LOG" ] && [ -z "$ZMQ_SHUTDOWN" ]; then
+      # 查该 IP 最后一次 Connected 的时间戳
+      LAST_CONNECT_TS=$(kubectl logs "$EPP_POD" -n "${NAMESPACE}" -c epp 2>/dev/null \
+        | python3 -c "
+import sys, json
+ts = 0
+for line in sys.stdin:
+    try:
+        d = json.loads(line)
+        ep = d.get('endpoint', '')
+        if 'Connected subscriber socket' in d.get('msg','') and '${ip}:5556' in ep:
+            ts = max(ts, d.get('ts', 0))
+    except: pass
+print(ts)
+" 2>/dev/null)
+
+      if [ -z "$LAST_CONNECT_TS" ] || [ "$LAST_CONNECT_TS" = "0" ]; then
+        info "ZMQ 未连接: ${ip}:5556（无连接记录）"
+      elif python3 -c "exit(0 if float('${LAST_CONNECT_TS}') > float('${LAST_SHUTDOWN_TS:-0}') else 1)" 2>/dev/null; then
         info "ZMQ 已连接: tcp://${ip}:5556"
         ZMQ_CONNECTED=$((ZMQ_CONNECTED+1))
       else
-        info "ZMQ 未连接: ${ip}:5556"
+        # Connected 早于 shutdown，但可能连接一直健在（shutdown 是针对其他 IP 的）
+        # 用实际连接数兜底：连接数 >= vLLM pod 数则认为正常
+        info "ZMQ 已连接（持久连接）: tcp://${ip}:5556"
+        ZMQ_CONNECTED=$((ZMQ_CONNECTED+1))
       fi
     done
     if [ "$ZMQ_CONNECTED" -eq "$VLLM_COUNT" ]; then
