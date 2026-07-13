@@ -1,10 +1,8 @@
 #!/bin/bash
 # downlowd-image.sh — 拉取 precise-prefix-cache-routing 所需镜像
 #
-# 额外镜像（相比 optimized-baseline）：
-#   vllm/vllm-openai-cpu:v0.23.0  — render (tokenizer) service，无 GPU，CPU-only 镜像
-#
-# vLLM model server 镜像与 deploy-gateway/deploy-standalone 相同（vllm/vllm-openai:v0.23.0）
+# 镜像与 deploy-gateway/deploy-standalone 相同：
+#   vllm/vllm-openai:v0.23.0  — model server（GPU 推理）和 render service（tokenize，不申请 GPU）共用同一镜像
 set -e
 
 REGISTRY="registry.cn-hangzhou.aliyuncs.com/airouter"
@@ -37,15 +35,11 @@ pull_from_aliyun \
   "llm-d-router-endpoint-picker:v0.9.0" \
   "ghcr.io/llm-d/llm-d-router-endpoint-picker:v0.9.0"
 
-echo "=== 2. vLLM GPU image (from Aliyun) ==="
+echo "=== 2. vLLM image (from Aliyun) ==="
+# model server 和 render service 共用同一镜像，render pod 不申请 nvidia.com/gpu
 pull_from_aliyun \
   "vllm-openai:v0.23.0" \
   "vllm/vllm-openai:v0.23.0"
-
-echo "=== 3. vLLM CPU image — render/tokenizer service (from Aliyun) ==="
-pull_from_aliyun \
-  "vllm-openai-cpu:v0.23.0" \
-  "vllm/vllm-openai-cpu:v0.23.0"
 
 echo ""
 echo "=== 镜像就绪 ==="

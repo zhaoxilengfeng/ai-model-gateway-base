@@ -31,8 +31,89 @@ kubectl create secret generic llm-d-hf-token \
   --dry-run=client -o yaml | kubectl apply -f -
 
 echo "=== 4. Deploy render (tokenizer) Service ==="
-# render service 用 CPU-only vLLM 做 tokenize，EPP token-producer 通过 HTTP 调用
-kubectl apply -n "${NAMESPACE}" -k "${REPO_ROOT}/guides/${GUIDE_NAME}/render/"
+# render 只做 tokenize（vllm launch render），与 model server 共用同一镜像
+# 不申请 nvidia.com/gpu，K8s 不会给它分配 GPU，调度到 GPU 节点上也无影响
+kubectl apply -n "${NAMESPACE}" -f - <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ${GUIDE_NAME}-render
+  namespace: ${NAMESPACE}
+  labels:
+    app.kubernetes.io/component: vllm-render
+    app.kubernetes.io/part-of: ${GUIDE_NAME}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: vllm-render
+      app.kubernetes.io/part-of: ${GUIDE_NAME}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: vllm-render
+        app.kubernetes.io/part-of: ${GUIDE_NAME}
+    spec:
+      automountServiceAccountToken: false
+      containers:
+      - name: vllm-render
+        image: vllm/vllm-openai:v0.23.0
+        imagePullPolicy: IfNotPresent
+        command: ["vllm", "launch", "render"]
+        args:
+        - "\${MODEL_NAME:-qwen25-7b-instruct}"
+        - "--port=8000"
+        ports:
+        - name: render-http
+          containerPort: 8000
+        env:
+        - name: HF_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: llm-d-hf-token
+              key: HF_TOKEN
+        - name: HF_HUB_OFFLINE
+          value: "1"
+        - name: DO_NOT_TRACK
+          value: "1"
+        - name: HF_HOME
+          value: /tmp/hf
+        resources:
+          requests:
+            cpu: "1"
+            memory: 4Gi
+          limits:
+            cpu: "4"
+            memory: 12Gi
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: render-http
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          failureThreshold: 30
+        volumeMounts:
+        - mountPath: /tmp/hf
+          name: hf-cache
+      volumes:
+      - name: hf-cache
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ${GUIDE_NAME}-render
+  namespace: ${NAMESPACE}
+spec:
+  selector:
+    app.kubernetes.io/component: vllm-render
+    app.kubernetes.io/part-of: ${GUIDE_NAME}
+  ports:
+  - name: render-http
+    port: 8000
+    targetPort: render-http
+    protocol: TCP
+EOF
 
 echo "=== 5. Install llm-d-router-standalone (EPP + Envoy sidecar) ==="
 helm upgrade --install "${GUIDE_NAME}" "$ROUTER_CHART_DIR" \
