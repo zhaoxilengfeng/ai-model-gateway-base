@@ -7,6 +7,16 @@
 # 该路径即 install.sh 中 DEVICE_PLUGIN_CHART_DIR 的默认值。
 set -e
 
+# 代理默认不启用；需要时通过环境变量传入：
+#   HTTPS_PROXY=socks5h://127.0.0.1:1080 bash prepare.sh
+PROXY_CMD=""
+if [[ -n "${HTTPS_PROXY:-}" ]]; then
+  PROXY_CMD="https_proxy=${HTTPS_PROXY}"
+elif [[ -n "${https_proxy:-}" ]]; then
+  PROXY_CMD="https_proxy=${https_proxy}"
+fi
+
+
 DEVICE_PLUGIN_VERSION="${DEVICE_PLUGIN_VERSION:-0.19.3}"
 DEPLOY_DIR="${DEPLOY_DIR:-/root/deploy/nvidia}"
 CHART_DIR="$DEPLOY_DIR/nvidia-device-plugin"
@@ -18,7 +28,7 @@ if [ -f "$CHART_DIR/Chart.yaml" ]; then
   echo "  已存在，跳过（如需重新下载请删除 $CHART_DIR）"
 else
   helm repo add nvdp https://nvidia.github.io/k8s-device-plugin 2>/dev/null || true
-  https_proxy=socks5h://127.0.0.1:1080 helm repo update nvdp 2>/dev/null
+  ${PROXY_CMD:+$PROXY_CMD }helm repo update nvdp 2>/dev/null
   helm pull nvdp/nvidia-device-plugin \
     --version "$DEVICE_PLUGIN_VERSION" \
     --untar --untardir "$DEPLOY_DIR"

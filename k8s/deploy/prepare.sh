@@ -9,6 +9,16 @@
 #   K8S_VERSION   K8s 版本，默认 1.35.0
 set -e
 
+# 代理默认不启用；需要时通过环境变量传入：
+#   HTTPS_PROXY=socks5h://127.0.0.1:1080 bash prepare.sh
+PROXY_CMD=""
+if [[ -n "${HTTPS_PROXY:-}" ]]; then
+  PROXY_CMD="https_proxy=${HTTPS_PROXY}"
+elif [[ -n "${https_proxy:-}" ]]; then
+  PROXY_CMD="https_proxy=${https_proxy}"
+fi
+
+
 K8S_VERSION="${K8S_VERSION:-1.35.0}"
 
 echo "=== 0. 系统基础配置 ==="
@@ -104,7 +114,7 @@ echo "=== 3. Download Calico manifest (${CALICO_VERSION}) ==="
 if [ -f "$CALICO_YAML" ]; then
   echo "  已存在，跳过（如需重新下载请删除 $CALICO_YAML）"
 else
-  https_proxy=socks5h://127.0.0.1:1080 curl -sL \
+  ${PROXY_CMD:+$PROXY_CMD }curl -sL \
     "https://raw.githubusercontent.com/projectcalico/calico/${CALICO_VERSION}/manifests/calico.yaml" \
     -o "$CALICO_YAML"
   echo "  下载到 $CALICO_YAML"

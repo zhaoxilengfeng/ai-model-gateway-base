@@ -8,6 +8,16 @@
 # 两个路径即 install.sh 中对应变量的默认值。
 set -e
 
+# 代理默认不启用；需要时通过环境变量传入：
+#   HTTPS_PROXY=socks5h://127.0.0.1:1080 bash prepare.sh
+PROXY_CMD=""
+if [[ -n "${HTTPS_PROXY:-}" ]]; then
+  PROXY_CMD="https_proxy=${HTTPS_PROXY}"
+elif [[ -n "${https_proxy:-}" ]]; then
+  PROXY_CMD="https_proxy=${https_proxy}"
+fi
+
+
 GATEWAY_API_VERSION="${GATEWAY_API_VERSION:-v1.2.1}"
 LLM_D_CHART_VERSION="${LLM_D_CHART_VERSION:-1.0.23}"
 DEPLOY_DIR="${DEPLOY_DIR:-/root/deploy/llm-d}"
@@ -23,7 +33,7 @@ echo "=== 1. Download Gateway API CRDs (${GATEWAY_API_VERSION}) ==="
 if [ -f "$GATEWAY_API_YAML" ]; then
   echo "  已存在，跳过（如需重新下载请删除 $GATEWAY_API_YAML）"
 else
-  https_proxy=socks5h://127.0.0.1:1080 curl -sL \
+  ${PROXY_CMD:+$PROXY_CMD }curl -sL \
     "https://github.com/kubernetes-sigs/gateway-api/releases/download/${GATEWAY_API_VERSION}/standard-install.yaml" \
     -o "$GATEWAY_API_YAML"
   echo "  下载到 $GATEWAY_API_YAML"
@@ -41,7 +51,7 @@ else
     echo "  使用本地缓存: $CACHED_TGZ"
     tar -xzf "$CACHED_TGZ" -C "$DEPLOY_DIR/llm-d-chart-src"
   else
-    https_proxy=socks5h://127.0.0.1:1080 helm repo update llm-d 2>/dev/null || true
+    ${PROXY_CMD:+$PROXY_CMD }helm repo update llm-d 2>/dev/null || true
     helm pull llm-d/llm-d \
       --version "$LLM_D_CHART_VERSION" \
       --untar --untardir "$DEPLOY_DIR/llm-d-chart-src"
