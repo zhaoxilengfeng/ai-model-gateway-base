@@ -32,6 +32,60 @@ vllm launch render \
 
 ---
 
+## render service 与模型的对应关系
+
+**每个模型必须有一个独立的 render service**，因为不同模型使用不同的词表（vocabulary）和 tokenizer 实现，同一个 prompt 经过不同模型的 tokenizer 会产生完全不同的 token_ids，进而产生不同的 block hash，导致路由决策错误。
+
+```
+示例：同一 prompt "你好" 在不同模型下的 token_ids
+
+Qwen2.5-7B-Instruct:   [108386]               (1 个 token)
+LLaMA-3-8B:            [57668, 53901]          (2 个 token，BPE 不同)
+Baichuan2-7B:          [92395]                 (1 个 token，但 id 不同)
+```
+
+如果 render service 使用了错误的模型 tokenizer，计算出的 block hash 与 vLLM 实际缓存的 block hash 不一致，精准路由会**静默失效**（不报错，但永远命中不到缓存，prefix-cache-scorer 持续 score 0）。
+
+### 多模型部署的资源映射
+
+| 模型 | vLLM pods | render service | EPP |
+|---|---|---|---|
+| Qwen2.5-7B | pod-A, pod-B | render-qwen25-7b × 3 | epp-qwen25-7b × 2 |
+| LLaMA-3-8B | pod-C, pod-D | render-llama3-8b × 3 | epp-llama3-8b × 2 |
+| Qwen2.5-72B | pod-E, pod-F | render-qwen25-72b × 3 | epp-qwen25-72b × 2 |
+
+每个模型有自己独立的 InferencePool → EPP → render 链路，通过 HTTPRoute 的 path 或 header 将不同模型的请求分发到对应的链路。
+
+每个模型的 EPP `token-producer.vllm.url` 指向各自模型的 render service：
+
+```yaml
+# 模型 Qwen2.5-7B 的 EPP 配置
+- type: token-producer
+  parameters:
+    modelName: qwen25-7b-instruct
+    vllm:
+      url: "http://qwen25-7b-render:8000"
+
+# 模型 LLaMA-3-8B 的 EPP 配置（独立的 EPP Deployment）
+- type: token-producer
+  parameters:
+    modelName: llama3-8b-instruct
+    vllm:
+      url: "http://llama3-8b-render:8000"
+```
+
+### 同一模型多副本：共用一个 render service
+
+同一模型的多个 vLLM pod 使用相同的词表，因此可以共用一个 render service（通过 Service 做负载均衡）：
+
+```
+同一模型的 N 个 vLLM pod
+  └── 共用同一个 render Service（3 副本）
+        └── 每个副本加载相同的 tokenizer 文件
+```
+
+---
+
 ## render service 提供的 API
 
 render service 是标准 vLLM HTTP 服务的子集，仅暴露以下接口：
@@ -157,6 +211,10 @@ DataProducer "token-producer/token-producer" failed:
 
 ## 常见问题
 
+### 部署了多个模型，render service 怎么部署
+
+每个模型对应一个独立的 render service（Deployment + Service），使用各自模型的 tokenizer 文件，通过不同的 Service 名称区分，各自的 EPP 配置指向对应的 render service URL。同一模型的多个 vLLM pod 共用一套 render service。
+
 ### render 挂掉怎么办
 
 精准路由降级（不影响推理）。EPP 日志出现：
@@ -165,9 +223,7 @@ DataProducer "token-producer/token-producer" failed:
 DataProducer "token-producer" failed: ... connection refused
 ```
 
-此时 `prefix-cache-scorer` score 全为 0，路由回退到 queue + kv-util scorer 的负载感知模式。
-
-render 恢复后 EPP 自动重试，无需重启。
+此时 `prefix-cache-scorer` score 全为 0，路由回退到 queue + kv-util scorer 的负载感知模式。render 恢复后 EPP 自动重试，无需重启。
 
 ### render 启动失败：联网下载 tokenizer
 
@@ -177,4 +233,4 @@ render 恢复后 EPP 自动重试，无需重启。
 
 ### render 副本数建议
 
-官方指南建议 3 副本（与 EPP 副本数解耦，独立扩容）。tokenize 属于 CPU 密集型轻量操作，单副本吞吐约 200-500 req/s，3 副本足以覆盖大多数场景。
+官方指南建议 3 副本（与 EPP 副本数解耦，独立扩容）。tokenize 属于 CPU 轻量操作，单副本吞吐约 200-500 req/s，3 副本足以覆盖大多数场景。多模型部署时每个模型的 render service 各自独立扩容。
