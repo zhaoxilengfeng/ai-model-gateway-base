@@ -14,6 +14,20 @@ AGW_CRD_DIR="$DEPLOY_DIR/agentgateway-crds"
 
 mkdir -p "$DEPLOY_DIR"
 
+# ── 0. 确保 helm 已安装 ───────────────────────────────────────────────────────
+echo "=== 0. Check helm ==="
+if ! command -v helm &>/dev/null; then
+  echo "  helm 未安装，通过代理下载安装..."
+  https_proxy=socks5h://127.0.0.1:1080 curl -fsSL \
+    https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 \
+    -o /tmp/get-helm.sh
+  HTTPS_PROXY=socks5h://127.0.0.1:1080 bash /tmp/get-helm.sh
+  rm -f /tmp/get-helm.sh
+  echo "  helm $(helm version --short) 安装完成"
+else
+  echo "  已存在: $(helm version --short)"
+fi
+
 # ── 1. llm-d-router-gateway chart ────────────────────────────────────────────
 echo "=== 1. Pull llm-d-router-gateway chart (${ROUTER_CHART_VERSION}) ==="
 if [ -f "$CHART_DIR/Chart.yaml" ]; then
