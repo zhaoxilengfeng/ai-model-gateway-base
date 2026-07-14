@@ -139,6 +139,12 @@ if not stages_a:
 if not stages_b:
     print(f"[ERROR] 找不到 {loc_b} 的结果", file=sys.stderr); sys.exit(1)
 
+def cjk_ljust(s, width):
+    """处理中文字符双宽度的左对齐"""
+    display_len = sum(2 if '一' <= c <= '鿿' or '　' <= c <= '〿' else 1 for c in s)
+    pad = max(0, width - display_len)
+    return s + ' ' * pad
+
 def metric(d, *keys, default=0):
     v = d
     for k in keys:
@@ -146,16 +152,18 @@ def metric(d, *keys, default=0):
     return float(v) if isinstance(v, (int, float, str)) and str(v).replace('.','',1).lstrip('-').isdigit() else default
 
 def improve(a, b, lower_better=True):
-    if a == 0: return "-"
+    if a == 0: return "  -  "
     diff = (a - b) / a * 100 if lower_better else (b - a) / a * 100
     arrow = "↓" if diff > 0 else "↑"
     return f"{arrow}{abs(diff):.1f}%"
 
-W = 28
+W = 24
+SEP = "─" * (W + 34)
+HDR = f"  {'指标':{''}<{W-2}}  {label_a:>12}  {label_b:>12}  {'变化':>8}"
 print()
-print(f"  {'':=<{W+32}}")
-print(f"  {'指标':<{W}} {label_a:>10}  {label_b:>10}  {'变化':>8}")
-print(f"  {'':=<{W+32}}")
+print(f"  {SEP}")
+print(HDR)
+print(f"  {SEP}")
 
 common_stages = sorted(set(stages_a) & set(stages_b))
 rates = []
@@ -179,9 +187,12 @@ for idx, stage in enumerate(common_stages):
     obs_b = get_observability(loc_b, stage)
 
     rate = rates[idx]
-    print(f"\n  --- rate={rate} QPS ---")
-    succ_a, succ_b = sa.get('count', 0), sb.get('count', 0)
-    print(f"  {'成功/失败':<{W}} {succ_a:>4}/{fa:<5} {succ_b:>4}/{fb:<5}")
+    print(f"\n  ── rate={rate} QPS {'─'*50}")
+    succ_a, succ_b = int(sa.get('count', 0)), int(sb.get('count', 0))
+    fa_i, fb_i = int(fa), int(fb)
+    sf_a = f"{succ_a}/{fa_i}"
+    sf_b = f"{succ_b}/{fb_i}"
+    print(f"  {cjk_ljust('成功/失败', W)}  {sf_a:>12}  {sf_b:>12}  {'':>8}")
 
     def row(name, *path, src_a=None, src_b=None, fmt=".3f", unit="s", lower_better=True, scale=1):
         sa_ = src_a if src_a is not None else sa
@@ -190,7 +201,9 @@ for idx, stage in enumerate(common_stages):
         vb = metric(sb_, *path) * scale
         if va == 0 and vb == 0: return
         imp = improve(va, vb, lower_better)
-        print(f"  {name:<{W}} {va:>9{fmt}}{unit}  {vb:>9{fmt}}{unit}  {imp:>8}")
+        va_s = f"{va:{fmt}}{unit}"
+        vb_s = f"{vb:{fmt}}{unit}"
+        print(f"  {cjk_ljust(name, W)}  {va_s:>12}  {vb_s:>12}  {imp:>8}")
 
     # 核心延迟指标（从 stage_N json）
     row("TTFT p50",   'latency','time_to_first_token','median')
@@ -202,32 +215,31 @@ for idx, stage in enumerate(common_stages):
     row("E2E p90",    'latency','request_latency','p90')
     row("E2E p99",    'latency','request_latency','p99')
 
-    # NTPOT（从 v0.2 report）
     ntpot_a = metric(bra, 'normalized_time_per_output_token', 'p50') * 1000
     ntpot_b = metric(brb, 'normalized_time_per_output_token', 'p50') * 1000
     if ntpot_a > 0 or ntpot_b > 0:
         imp = improve(ntpot_a, ntpot_b)
-        print(f"  {'NTPOT p50':<{W}} {ntpot_a:>9.1f}ms  {ntpot_b:>9.1f}ms  {imp:>8}")
+        print(f"  {cjk_ljust('NTPOT p50', W)}  {ntpot_a:>11.1f}ms  {ntpot_b:>11.1f}ms  {imp:>8}")
 
     # 吞吐量
-    row("输出 tok/s",  'throughput','output_tokens_per_sec', fmt=".1f", unit=" ", lower_better=False)
-    row("总 tok/s",   'throughput','total_tokens_per_sec',  fmt=".1f", unit=" ", lower_better=False)
+    row("输出 tok/s",  'throughput','output_tokens_per_sec', fmt=".0f", unit=" ", lower_better=False)
+    row("总 tok/s",   'throughput','total_tokens_per_sec',  fmt=".0f", unit=" ", lower_better=False)
 
     # 前缀缓存命中率（--monitoring 后才有）
     hit_a = metric(obs_a, 'vllm_prefix_cache_hit_rate', 'mean') * 100
     hit_b = metric(obs_b, 'vllm_prefix_cache_hit_rate', 'mean') * 100
     if hit_a > 0 or hit_b > 0:
         imp = improve(hit_a, hit_b, lower_better=False)
-        print(f"  {'KV cache 命中率 (mean)':<{W}} {hit_a:>9.1f}%   {hit_b:>9.1f}%   {imp:>8}")
+        print(f"  {cjk_ljust('KV cache 命中率', W)}  {hit_a:>11.1f}%   {hit_b:>11.1f}%   {imp:>8}")
 
     epp_a = metric(obs_a, 'inference_extension_prefix_indexer_hit_ratio', 'mean') * 100
     epp_b = metric(obs_b, 'inference_extension_prefix_indexer_hit_ratio', 'mean') * 100
     if epp_a > 0 or epp_b > 0:
         imp = improve(epp_a, epp_b, lower_better=False)
-        print(f"  {'EPP prefix 命中率 (mean)':<{W}} {epp_a:>9.1f}%   {epp_b:>9.1f}%   {imp:>8}")
+        print(f"  {cjk_ljust('EPP prefix 命中率', W)}  {epp_a:>11.1f}%   {epp_b:>11.1f}%   {imp:>8}")
 
 print()
-print(f"  {'':=<{W+32}}")
+print(f"  {SEP}")
 print(f"  {label_a}: {dir_a}")
 print(f"  {label_b}: {dir_b}")
 print()
