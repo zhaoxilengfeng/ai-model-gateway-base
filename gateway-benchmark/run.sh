@@ -161,11 +161,13 @@ DATA_ACCESS_TIMEOUT="$(yaml_get '.defaults.data_access_timeout' 2>/dev/null || e
 # metrics 端口：我们的 vLLM 在 8000 暴露 metrics，llmdbenchmark 默认 8200
 METRICS_PORT="${METRICS_PORT:-$(yaml_get '.defaults.metrics_port' 2>/dev/null || echo '8000')}"
 
-# --- PV 自动释放（Released 状态的 PV 需清除 claimRef 才能重新绑定）---
-for pv in $(kubectl get pv -o jsonpath='{range .items[?(@.status.phase=="Released")]}{.metadata.name}{"\n"}{end}' 2>/dev/null); do
-    kubectl patch pv "$pv" -p '{"spec":{"claimRef":null}}' &>/dev/null && \
-        echo "[INFO] PV $pv 已释放，可重新绑定" || true
-done
+# --- PV 自动释放（dry-run 时跳过）---
+if ! $DRY_RUN; then
+    for pv in $(kubectl get pv -o jsonpath='{range .items[?(@.status.phase=="Released")]}{.metadata.name}{"\n"}{end}' 2>/dev/null); do
+        kubectl patch pv "$pv" -p '{"spec":{"claimRef":null}}' &>/dev/null && \
+            echo "[INFO] PV $pv 已释放，可重新绑定" || true
+    done
+fi
 
 # 移除 .in 后缀（用户可以带或不带）
 WORKLOAD="${WORKLOAD%.in}"
@@ -199,10 +201,10 @@ if [[ -n "$EXPERIMENT" ]]; then
     EXP_ARG=(--experiments "${EXP_FILE}")
 fi
 
-# --- 构造工作目录（按时间戳隔离） ---
+# --- 构造工作目录（按时间戳隔离，dry-run 时不创建）---
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 WORKSPACE="${SCRIPT_DIR}/results/${GATEWAY}/${HARNESS}/${TIMESTAMP}"
-mkdir -p "$WORKSPACE"
+$DRY_RUN || mkdir -p "$WORKSPACE"
 
 # --- 构造命令 ---
 CMD=(
