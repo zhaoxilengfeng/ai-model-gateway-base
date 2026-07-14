@@ -138,6 +138,12 @@ WORKLOAD="${WORKLOAD:-$(yaml_get '.defaults.workload')}"
 PARALLELISM="${PARALLELISM:-$(yaml_get '.defaults.parallelism')}"
 DATA_ACCESS_TIMEOUT="$(yaml_get '.defaults.data_access_timeout' 2>/dev/null || echo '600')"
 
+# --- PV 自动释放（Released 状态的 PV 需清除 claimRef 才能重新绑定）---
+for pv in $(kubectl get pv -o jsonpath='{range .items[?(@.status.phase=="Released")]}{.metadata.name}{"\n"}{end}' 2>/dev/null); do
+    kubectl patch pv "$pv" -p '{"spec":{"claimRef":null}}' &>/dev/null && \
+        echo "[INFO] PV $pv 已释放，可重新绑定" || true
+done
+
 # 移除 .in 后缀（用户可以带或不带）
 WORKLOAD="${WORKLOAD%.in}"
 
