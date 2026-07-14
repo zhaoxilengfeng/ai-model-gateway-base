@@ -114,6 +114,17 @@ while [[ $# -gt 0 ]]; do
             echo "=== 可用 Experiments ==="
             ls "${SCRIPT_DIR}/experiments/"*.yaml | xargs -n1 basename | sed 's/^/  /'
             exit 0 ;;
+        --list-results)
+            echo "=== 历史测试结果 ==="
+            find "${SCRIPT_DIR}/results" -name "summary_lifecycle_metrics.json" 2>/dev/null \
+                | sed "s|${SCRIPT_DIR}/results/||" \
+                | sed 's|/[^/]*/summary_lifecycle_metrics.json||' \
+                | sort -r \
+                | awk 'NR<=20{print "  " NR". "$0}'
+            echo ""
+            echo "用法: ./show.sh results/<gateway>/<harness>/<timestamp>"
+            echo "对比: ./compare.sh results/A results/B [标签A] [标签B]"
+            exit 0 ;;
         *)                  EXTRA_ARGS+=("$1"); shift ;;
     esac
 done
@@ -136,6 +147,7 @@ if [[ -z "$GATEWAY" ]]; then
     echo "  --dry-run         只打印命令"
     echo "  --list-profiles   列出可用 profiles"
     echo "  --list-experiments 列出可用 experiments"
+    echo "  --list-results    列出历史测试结果"
     exit 1
 fi
 

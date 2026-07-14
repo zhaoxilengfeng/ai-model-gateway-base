@@ -118,12 +118,28 @@ if not stages:
 # 读取 run_metadata
 meta = read_json(loc, "run_metadata.json") or {}
 
-# 推断 rates
+# 推断各 stage 的 rate（从 run_metadata 里的 workload 配置读，fallback 到 succ/duration）
 rates = {}
+# 先尝试从 workload yaml 文件读 stage 配置
+workload_files = list_files(loc, "*.yaml") + list_files(loc, "*.yaml.in")
+stage_durations = {}
+for wf in workload_files:
+    content = read_file(loc, wf)
+    if 'stages' in content and 'rate' in content:
+        try:
+            import yaml as _yaml
+            wdata = _yaml.safe_load(content)
+            stgs = (wdata.get('load') or {}).get('stages', [])
+            for si, st in enumerate(stgs):
+                if isinstance(st, dict):
+                    stage_durations[si] = st.get('duration', 120)
+        except: pass
+        break
+
 for i, d in stages.items():
     succ = m(d, 'successes', 'count')
-    dur = m(d, 'successes', 'count')  # 近似
-    rates[i] = round(succ / 120) if succ else i+1
+    dur = stage_durations.get(i, 120)
+    rates[i] = round(succ / dur) if succ and dur else i+1
 
 print()
 print("╔══════════════════════════════════════════════════════╗")

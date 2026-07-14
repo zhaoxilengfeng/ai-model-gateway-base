@@ -1,6 +1,22 @@
 # Gateway Benchmark 使用手册
 
-## 0. 前置配置
+## 0. 一键初始化环境（新用户从这里开始）
+
+```bash
+cd /root/ai-model-gateway-base/gateway-benchmark
+
+# 自动创建 PV、同步 tokenizer 到所有节点
+bash setup.sh
+
+# 查看可用 profiles / experiments / 历史结果
+./run_llmd.sh --list-profiles
+./run_llmd.sh --list-experiments
+./run_llmd.sh --list-results
+```
+
+---
+
+## 1. 前置配置
 
 编辑 `config.yaml`，填写要测试的网关信息：
 
@@ -114,19 +130,25 @@ cd /root/ai-model-gateway-base/gateway-benchmark
 ./run_llmd.sh --workload code_completion_synthetic.yaml
 ```
 
-### 4.5 Agent 多轮编程场景
+### 4.5 文档摘要场景（长输入短输出）
+
+```bash
+./run_llmd.sh --workload summarization_synthetic.yaml
+```
+
+### 4.6 Agent 多轮编程场景
 
 ```bash
 ./run_llmd.sh --workload agentic_code_generation.yaml
 ```
 
-### 4.6 极限并发吞吐（找服务上限）
+### 4.7 极限并发吞吐（找服务上限）
 
 ```bash
 ./run_llmd.sh --workload random_concurrent.yaml
 ```
 
-### 4.7 真实 Coding 流量回放
+### 4.8 真实 Coding 流量回放
 
 使用 Qwen Bailian 真实代码补全请求的 token 分布（需提前准备数据，见第 6 节）：
 
@@ -138,9 +160,15 @@ cd /root/ai-model-gateway-base/gateway-benchmark
 
 ```bash
 ./run_llmd.sh --harness guidellm --workload sweep_chatbot.yaml
+
+# guidellm 共享前缀场景
+./run_llmd.sh --harness guidellm --workload shared_prefix_synthetic.yaml
+
+# guidellm 快速验通
+./run_llmd.sh --harness guidellm --workload sanity.yaml
 ```
 
-### 4.9 带 monitoring 采集 vLLM 指标
+### 4.10 带 monitoring 采集 vLLM 指标
 
 ```bash
 ./run_llmd.sh --workload sweep_shared_prefix.yaml --monitoring --analyze
