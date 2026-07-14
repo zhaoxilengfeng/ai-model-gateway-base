@@ -15,6 +15,9 @@
 | `otel_trace_replay` | Azure Trace / Qwen Trace | 生产流量回放 |
 | `conversation_replay` | 任意多轮对话 JSON | 自定义对话回放 |
 
+> **编码场景**：inference-perf 无专用 `code` data.type，使用 `random` 并调整 token 分布来模拟（长输入短输出）；
+> 真实代码数据集（HumanEval、MBPP）用于能力评测，不直接用于吞吐/延迟压测。
+
 ---
 
 ## 1. 生产流量 Trace（最接近真实场景）
@@ -93,7 +96,43 @@
 
 ---
 
-## 4. 数据集放置路径
+## 4. 编码场景数据集
+
+编码场景有两类用途，需区分：
+
+### 4.1 吞吐/延迟压测（与 gateway-benchmark 直接相关）
+
+编码请求的典型特征：**长输入（代码上下文）、短输出（补全片段）**。
+用 `random` data.type 调整分布即可模拟，无需专用数据集：
+
+```yaml
+# profiles/inference-perf/code_completion_synthetic.yaml.in（官方已有）
+data:
+  type: random
+  input_distribution:
+    mean: 2048    # 代码上下文较长
+    max: 4096
+  output_distribution:
+    mean: 128     # 补全输出较短
+    max: 256
+```
+
+Azure LLM Trace 2023 中的 `AzureLLMInferenceTrace_code.csv` 是真实代码补全请求的 trace，
+可用于 trace replay，比随机分布更准确：
+- **下载**：https://github.com/Azure/AzurePublicDataset/blob/master/AzureLLMInferenceTrace2023.md
+
+### 4.2 代码能力评测（正确性，与压测无关）
+
+以下数据集用于测模型**能否写出正确代码**，不用于吞吐/延迟压测：
+
+| 数据集 | 仓库 | 说明 |
+|--------|------|------|
+| HumanEval | https://github.com/openai/human-eval | 164 道 Python 编程题，pass@k 指标 |
+| MBPP | https://github.com/google-research/google-research/tree/master/mbpp | 500 个基础 Python 问题 |
+| EvalPlus（增强版） | https://github.com/evalplus/evalplus | HumanEval / MBPP 增强版，测试更严格 |
+| HumanEval Pro | https://arxiv.org/abs/2412.21199 | 自调用代码生成，考察多步推理 |
+
+---
 
 数据集文件需放到 workload PVC 内，harness pod 才能访问：
 
