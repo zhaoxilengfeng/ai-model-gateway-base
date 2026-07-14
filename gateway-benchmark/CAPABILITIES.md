@@ -59,16 +59,23 @@
 
 | Profile | 场景 | 负载描述 |
 |---------|------|----------|
-| `sanity.yaml` | 快速验通 | 1 QPS，30s，小 prompt（256~512 tokens in，10~100 tokens out） |
-| `sweep_chatbot.yaml` | 通用聊天场景阶梯压测 | 1→2→4→8 QPS，各 120s，随机 prompt（均值 4096 in / 1024 out） |
-| `sweep_shared_prefix.yaml` | 前缀缓存命中场景 | 1→2→4→8 QPS，各 120s，32 组 × 32 条共享前缀请求（system_prompt 2048 tokens） |
+| `sanity.yaml` | 快速验通 | 1 QPS，30s，小 prompt（256~512 in，10~100 out） |
+| `sweep_chatbot.yaml` | 通用对话阶梯压测 | 1→2→4→8 QPS，各 120s，随机 prompt（均值 512 in / 256 out） |
+| `sweep_shared_prefix.yaml` | 前缀缓存命中 | 1→2→4→8 QPS，32组×32条共享前缀（system_prompt 512 tokens） |
+| `shared_prefix_multi_turn_chat.yaml` | 多轮对话 + 前缀缓存 | 2→3→4→5 QPS，共享 system_prompt + 多轮上下文累积，session 级指标 |
+| `code_completion_synthetic.yaml` | 代码补全场景 | 1→2→4→8 QPS，长输入短输出（均值 2048 in / 128 out） |
+| `summarization_synthetic.yaml` | 文档摘要场景 | 1→2→4→8 QPS，长输入短输出（均值 2048 in / 128 out） |
+| `random_concurrent.yaml` | 极限并发吞吐 | 1/2/4/8 并发，随机 prompt（均值 2048 in / 256 out） |
+| `agentic_code_generation.yaml` | Agent 编程多轮 | 5→10→20→30→40 并发，conversation_replay，tool call 延迟模拟 |
+| `qwen_coder_trace.yaml` | 真实 Coding 流量回放 | 4 并发 session，weka_trace_replay，200 sessions |
 
 ### guidellm
 
 | Profile | 场景 | 负载描述 |
 |---------|------|----------|
 | `sanity.yaml` | 快速验通 | rate 1，30s |
-| `sweep_chatbot.yaml` | 通用聊天阶梯压测 | 1→2→4→8 QPS，各 120s，4096 in / 1024 out |
+| `sweep_chatbot.yaml` | 通用对话阶梯压测 | 1→2→4→8 QPS，各 120s，512 in / 256 out |
+| `shared_prefix_synthetic.yaml` | 共享前缀场景 | 多阶段 rate sweep，prefix_count=32 |
 
 ---
 

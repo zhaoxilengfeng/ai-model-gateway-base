@@ -22,19 +22,19 @@ server:
   base_url: REPLACE_ENV_LLMDBENCH_HARNESS_STACK_ENDPOINT_URL
   ignore_eos: true
 tokenizer:
-  pretrained_model_name_or_path: REPLACE_ENV_LLMDBENCH_DEPLOY_CURRENT_MODEL
+  pretrained_model_name_or_path: /requests/tokenizer
 data:
   type: random
   input_distribution:
-    min: 5000           # min length of the synthetic prompts
-    max: 10000          # max length of the synthetic prompts
-    mean: 10000         # mean length of the synthetic prompts
-    std: 500            # standard deviation of the length of the synthetic prompts
+    min: 256
+    max: 6144           # 适配 max-model-len=8192，留 2048 给输出
+    mean: 2048
+    std: 1024
   output_distribution:
-    min: 500            # min length of the output to be generated
-    max: 1000           # max length of the output to be generated
-    mean: 1000          # mean length of the output to be generated
-    std: 100            # standard deviation of the length of the output to be generated
+    min: 128
+    max: 512
+    mean: 256
+    std: 128
 report:
   request_lifecycle:
     summary: true

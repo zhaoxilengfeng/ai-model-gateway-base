@@ -92,21 +92,41 @@ cd /root/ai-model-gateway-base/gateway-benchmark
 
 ### 4.1 通用对话阶梯压测（随机负载）
 
-1→2→4→8 QPS，各 120s，随机 prompt（均值 512 tokens 输入 / 256 tokens 输出）：
-
 ```bash
 ./run_llmd.sh --workload sweep_chatbot.yaml
 ```
 
 ### 4.2 前缀缓存效果测试
 
-32 组 × 32 条共享 system_prompt，测精确前缀路由的 KV cache 命中收益：
-
 ```bash
 ./run_llmd.sh --workload sweep_shared_prefix.yaml
 ```
 
-### 4.3 真实 Coding 流量回放
+### 4.3 多轮对话 + 前缀缓存（session 级指标）
+
+```bash
+./run_llmd.sh --workload shared_prefix_multi_turn_chat.yaml
+```
+
+### 4.4 代码补全场景
+
+```bash
+./run_llmd.sh --workload code_completion_synthetic.yaml
+```
+
+### 4.5 Agent 多轮编程场景
+
+```bash
+./run_llmd.sh --workload agentic_code_generation.yaml
+```
+
+### 4.6 极限并发吞吐（找服务上限）
+
+```bash
+./run_llmd.sh --workload random_concurrent.yaml
+```
+
+### 4.7 真实 Coding 流量回放
 
 使用 Qwen Bailian 真实代码补全请求的 token 分布（需提前准备数据，见第 6 节）：
 
@@ -114,10 +134,16 @@ cd /root/ai-model-gateway-base/gateway-benchmark
 ./run_llmd.sh --workload qwen_coder_trace.yaml
 ```
 
-### 4.4 切换为 guidellm（测最大吞吐）
+### 4.8 切换为 guidellm（测最大吞吐）
 
 ```bash
 ./run_llmd.sh --harness guidellm --workload sweep_chatbot.yaml
+```
+
+### 4.9 带 monitoring 采集 vLLM 指标
+
+```bash
+./run_llmd.sh --workload sweep_shared_prefix.yaml --monitoring --analyze
 ```
 
 ---

@@ -12,7 +12,7 @@ load:
   - rate: 5
     duration: 60
 api:
-  type: completion
+  type: chat
   streaming: true
 server:
   type: vllm
@@ -20,7 +20,7 @@ server:
   base_url: REPLACE_ENV_LLMDBENCH_HARNESS_STACK_ENDPOINT_URL
   ignore_eos: true
 tokenizer:
-  pretrained_model_name_or_path: REPLACE_ENV_LLMDBENCH_DEPLOY_CURRENT_TOKENIZER
+  pretrained_model_name_or_path: /requests/tokenizer
 data:
   type: shared_prefix
   shared_prefix:
