@@ -13,10 +13,11 @@
 | `shareGPT` | ShareGPT | 真实多轮对话 |
 | `cnn_dailymail` | CNN/DailyMail | 长文摘要（长输入短输出） |
 | `otel_trace_replay` | Azure Trace / Qwen Trace | 生产流量回放 |
+| `weka_trace_replay` | Qwen Coder Trace / ASTRA | 多轮 Agent 编程场景回放 |
 | `conversation_replay` | 任意多轮对话 JSON | 自定义对话回放 |
 
-> **编码场景**：inference-perf 无专用 `code` data.type，使用 `random` 并调整 token 分布来模拟（长输入短输出）；
-> 真实代码数据集（HumanEval、MBPP）用于能力评测，不直接用于吞吐/延迟压测。
+> **编码场景**：推理性能压测推荐 `weka_trace_replay`（Qwen Coder Trace 或 ASTRA），
+> 能力评测（能否写出正确代码）才用 HumanEval / MBPP，两者用途不同。
 
 ---
 
@@ -100,26 +101,49 @@
 
 编码场景有两类用途，需区分：
 
-### 4.1 吞吐/延迟压测（与 gateway-benchmark 直接相关）
+### 4.1 吞吐/延迟压测（Agent 编程真实场景）
 
-编码请求的典型特征：**长输入（代码上下文）、短输出（补全片段）**。
-用 `random` data.type 调整分布即可模拟，无需专用数据集：
+**ASTRA**（Agentic Serving TRAce Dataset）是目前最权威的 Agent 编程推理性能数据集（2025年）：
 
-```yaml
-# profiles/inference-perf/code_completion_synthetic.yaml.in（官方已有）
-data:
-  type: random
-  input_distribution:
-    mean: 2048    # 代码上下文较长
-    max: 4096
-  output_distribution:
-    mean: 128     # 补全输出较短
-    max: 256
-```
+- **论文**：https://arxiv.org/abs/2502.15981
+- **仓库**：https://github.com/WukLab/ASTRA
+- **数据来源**：SWE-bench（Claude 3.5 / GPT-4o）、OpenHands 生产环境、内部编程 Agent，共 **27,811 个 session、130万+ 轮次**
+- **核心特征**：
+  - 每个 session 平均 33-47 轮，比 ShareGPT 上下文长 3-10 倍
+  - 频繁 tool call（bash、文件编辑、搜索），造成突发 prefill 峰值
+  - 跨轮次 KV cache 复用可节省高达 60% prefill 计算
+- **inference-perf data.type**：`weka_trace_replay`
+- **profile 示例**：
+  ```yaml
+  load:
+    type: trace_session_replay
+    stages:
+      - concurrent_sessions: 4
+  data:
+    type: weka_trace_replay
+    weka_trace_replay:
+      trace_directory: /requests/datasets/astra
+      use_static_model: true
+      static_model_name: qwen25-7b-instruct
+      default_block_size: 16
+  ```
 
-Azure LLM Trace 2023 中的 `AzureLLMInferenceTrace_code.csv` 是真实代码补全请求的 trace，
-可用于 trace replay，比随机分布更准确：
-- **下载**：https://github.com/Azure/AzurePublicDataset/blob/master/AzureLLMInferenceTrace2023.md
+**Qwen Coder Trace**（阿里百炼，代码补全真实流量）：
+
+- **仓库**：https://github.com/alibaba-edu/qwen-bailian-usagetraces-anon
+- **下载**：
+  ```bash
+  # block size 16（与 llm-d EPP 默认配置一致，推荐）
+  wget https://github.com/alibaba-edu/qwen-bailian-usagetraces-anon/raw/refs/heads/main/qwen_coder_blksz_16.jsonl
+  ```
+- **inference-perf data.type**：`weka_trace_replay`
+- **特点**：包含 `hash_ids`（KV block 哈希），专为测试精确前缀路由命中率设计
+
+**AgentIQ 数据集**（含 SWE-bench 工具调用 trace）：
+
+- **论文**：https://arxiv.org/abs/2505.07942
+- **仓库**：https://github.com/MikeGu721/AgentIQ
+- **特点**：multi-turn tool call 交互 trace，含 system prompt 复用场景，适合测 KV cache reuse 效果
 
 ### 4.2 代码能力评测（正确性，与压测无关）
 
@@ -165,3 +189,5 @@ done
 | 多轮对话场景 | ShareGPT |
 | 文档摘要 / RAG 场景 | CNN/DailyMail |
 | 突发流量压测 | BurstGPT |
+| **Agent 编程场景（推荐，2025年最新）** | **ASTRA**（https://github.com/WukLab/ASTRA） |
+| Agent 编程 + 前缀路由验证 | Qwen Coder Trace（`qwen_coder_blksz_16.jsonl`） |
