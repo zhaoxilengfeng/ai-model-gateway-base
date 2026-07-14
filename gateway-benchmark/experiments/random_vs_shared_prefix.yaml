@@ -1,0 +1,22 @@
+# random_vs_shared_prefix.yaml
+# 用途：一次跑随机负载和共享前缀负载对比，自动生成 cross-treatment 对比报告
+#
+# 用法：
+#   ./run_llmd.sh --workload sweep_chatbot.yaml --experiment random_vs_shared_prefix.yaml --analyze
+#
+# 注意：两个 treatment 共用同一个基础 profile（sweep_chatbot），
+#       第二个 treatment 通过覆盖 data 字段切换为 shared_prefix 模式
+
+treatments:
+  - name: random
+    # 使用 profile 默认的 random 随机负载，不覆盖任何参数
+
+  - name: shared_prefix
+    # 切换为共享前缀模式，测试前缀路由的 KV cache 命中效果
+    data.type: shared_prefix
+    data.shared_prefix.num_groups: 32
+    data.shared_prefix.num_prompts_per_group: 32
+    data.shared_prefix.system_prompt_len: 512
+    data.shared_prefix.question_len: 128
+    data.shared_prefix.output_len: 128
+    data.shared_prefix.enable_multi_turn_chat: false
