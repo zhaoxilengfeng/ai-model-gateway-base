@@ -151,18 +151,32 @@ def metric(d, *keys, default=0):
         v = v.get(k, {}) if isinstance(v, dict) else {}
     return float(v) if isinstance(v, (int, float, str)) and str(v).replace('.','',1).lstrip('-').isdigit() else default
 
+def cjk_rjust(s, width):
+    """处理中文字符双宽度的右对齐"""
+    display_len = sum(2 if '一' <= c <= '鿿' or '　' <= c <= '〿' else 1 for c in s)
+    pad = max(0, width - display_len)
+    return ' ' * pad + s
+
 def improve(a, b, lower_better=True):
-    if a == 0: return "  -  "
-    diff = (a - b) / a * 100 if lower_better else (b - a) / a * 100
-    arrow = "↓" if diff > 0 else "↑"
-    return f"{arrow}{abs(diff):.1f}%"
+    if a == 0: return "    -    "
+    diff = (b - a) / a * 100
+    pct = f"{abs(diff):.1f}%"
+    if lower_better:
+        if diff < 0:   return f"↓{pct} ✓".rjust(9)
+        elif diff > 0: return f"↑{pct} ✗".rjust(9)
+        else:          return "  0.0%   "
+    else:
+        if diff > 0:   return f"↑{pct} ✓".rjust(9)
+        elif diff < 0: return f"↓{pct} ✗".rjust(9)
+        else:          return "  0.0%   "
 
 W = 24
-SEP = "─" * (W + 34)
-HDR = f"  {'指标':{''}<{W-2}}  {label_a:>12}  {label_b:>12}  {'变化':>8}"
+SEP = "─" * (W + 38)
+la_hdr = cjk_rjust(label_a, 12)
+lb_hdr = cjk_rjust(label_b, 12)
 print()
 print(f"  {SEP}")
-print(HDR)
+print(f"  {cjk_ljust('指标', W)}  {la_hdr}  {lb_hdr}  {'变化(绿=改善)':>12}")
 print(f"  {SEP}")
 
 common_stages = sorted(set(stages_a) & set(stages_b))
@@ -192,7 +206,7 @@ for idx, stage in enumerate(common_stages):
     fa_i, fb_i = int(fa), int(fb)
     sf_a = f"{succ_a}/{fa_i}"
     sf_b = f"{succ_b}/{fb_i}"
-    print(f"  {cjk_ljust('成功/失败', W)}  {sf_a:>12}  {sf_b:>12}  {'':>8}")
+    print(f"  {cjk_ljust('成功/失败', W)}  {sf_a:>12}  {sf_b:>12}  {'':>16}")
 
     def row(name, *path, src_a=None, src_b=None, fmt=".3f", unit="s", lower_better=True, scale=1):
         sa_ = src_a if src_a is not None else sa
@@ -203,7 +217,7 @@ for idx, stage in enumerate(common_stages):
         imp = improve(va, vb, lower_better)
         va_s = f"{va:{fmt}}{unit}"
         vb_s = f"{vb:{fmt}}{unit}"
-        print(f"  {cjk_ljust(name, W)}  {va_s:>12}  {vb_s:>12}  {imp:>8}")
+        print(f"  {cjk_ljust(name, W)}  {va_s:>12}  {vb_s:>12}  {imp:>16}")
 
     # 核心延迟指标（从 stage_N json）
     row("TTFT p50",   'latency','time_to_first_token','median')
@@ -221,7 +235,7 @@ for idx, stage in enumerate(common_stages):
         imp = improve(ntpot_a, ntpot_b)
         na_s = f"{ntpot_a:.1f}ms"
         nb_s = f"{ntpot_b:.1f}ms"
-        print(f"  {cjk_ljust('NTPOT p50', W)}  {na_s:>12}  {nb_s:>12}  {imp:>8}")
+        print(f"  {cjk_ljust('NTPOT p50', W)}  {na_s:>12}  {nb_s:>12}  {imp:>16}")
 
     # 吞吐量
     row("输出 tok/s",  'throughput','output_tokens_per_sec', fmt=".0f", unit=" ", lower_better=False)
@@ -232,16 +246,17 @@ for idx, stage in enumerate(common_stages):
     hit_b = metric(obs_b, 'vllm_prefix_cache_hit_rate', 'mean') * 100
     if hit_a > 0 or hit_b > 0:
         imp = improve(hit_a, hit_b, lower_better=False)
-        print(f"  {cjk_ljust('KV cache 命中率', W)}  {hit_a:>11.1f}%   {hit_b:>11.1f}%   {imp:>8}")
+        print(f"  {cjk_ljust('KV cache 命中率', W)}  {hit_a:>11.1f}%   {hit_b:>11.1f}%   {imp:>16}")
 
     epp_a = metric(obs_a, 'inference_extension_prefix_indexer_hit_ratio', 'mean') * 100
     epp_b = metric(obs_b, 'inference_extension_prefix_indexer_hit_ratio', 'mean') * 100
     if epp_a > 0 or epp_b > 0:
         imp = improve(epp_a, epp_b, lower_better=False)
-        print(f"  {cjk_ljust('EPP prefix 命中率', W)}  {epp_a:>11.1f}%   {epp_b:>11.1f}%   {imp:>8}")
+        print(f"  {cjk_ljust('EPP prefix 命中率', W)}  {epp_a:>11.1f}%   {epp_b:>11.1f}%   {imp:>16}")
 
 print()
 print(f"  {SEP}")
+print(f"  注: 绿色↓/↑ = 改善（延迟降低 或 吞吐提升）  红色 = 恶化")
 print(f"  {label_a}: {dir_a}")
 print(f"  {label_b}: {dir_b}")
 print()
