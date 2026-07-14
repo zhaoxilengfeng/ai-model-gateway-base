@@ -157,26 +157,30 @@ def cjk_rjust(s, width):
     pad = max(0, width - display_len)
     return ' ' * pad + s
 
+GREEN = chr(27) + '[32m'
+RED   = chr(27) + '[31m'
+RESET = chr(27) + '[0m'
+
 def improve(a, b, lower_better=True):
     if a == 0: return "    -    "
     diff = (b - a) / a * 100
     pct = f"{abs(diff):.1f}%"
     if lower_better:
-        if diff < 0:   return f"↓{pct} ✓".rjust(9)
-        elif diff > 0: return f"↑{pct} ✗".rjust(9)
+        if diff < 0:   return f"{GREEN}↓{pct}{RESET}".ljust(9 + len(GREEN) + len(RESET))
+        elif diff > 0: return f"{RED}↑{pct}{RESET}".ljust(9 + len(GREEN) + len(RESET))
         else:          return "  0.0%   "
     else:
-        if diff > 0:   return f"↑{pct} ✓".rjust(9)
-        elif diff < 0: return f"↓{pct} ✗".rjust(9)
+        if diff > 0:   return f"{GREEN}↑{pct}{RESET}".ljust(9 + len(GREEN) + len(RESET))
+        elif diff < 0: return f"{RED}↓{pct}{RESET}".ljust(9 + len(GREEN) + len(RESET))
         else:          return "  0.0%   "
 
-W = 24
-SEP = "─" * (W + 38)
+W = 18  # 指标名列宽（英文指标名最长约10字符，中文约14显示宽度）
+SEP = "─" * (W + 42)
 la_hdr = cjk_rjust(label_a, 12)
 lb_hdr = cjk_rjust(label_b, 12)
 print()
 print(f"  {SEP}")
-print(f"  {cjk_ljust('指标', W)}  {la_hdr}  {lb_hdr}  {'变化(绿=改善)':>12}")
+print(f"  {cjk_ljust('指标', W)}  {la_hdr}  {lb_hdr}  {'变化(绿↓/↑=改善)':>16}")
 print(f"  {SEP}")
 
 common_stages = sorted(set(stages_a) & set(stages_b))
@@ -256,7 +260,7 @@ for idx, stage in enumerate(common_stages):
 
 print()
 print(f"  {SEP}")
-print(f"  注: 绿色↓/↑ = 改善（延迟降低 或 吞吐提升）  红色 = 恶化")
+print(f"  注: {GREEN}绿色↓/↑{RESET} = 改善（延迟降低 或 吞吐提升）  {RED}红色{RESET} = 恶化")
 print(f"  {label_a}: {dir_a}")
 print(f"  {label_b}: {dir_b}")
 print()
