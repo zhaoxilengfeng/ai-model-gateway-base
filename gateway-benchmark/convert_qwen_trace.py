@@ -37,7 +37,7 @@ def build_chains(rows):
     return sessions
 
 def convert(input_file: str, output_dir: str, block_size: int = 16, max_sessions: int = None,
-            max_input_len: int = 7680):
+            max_input_len: int = 7680, max_model_len: int = 8192):
     input_path = Path(input_file)
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
@@ -71,12 +71,16 @@ def convert(input_file: str, output_dir: str, block_size: int = 16, max_sessions
         requests = []
         t = 0.0
         for req in chain:
+            in_len = req['input_length']
+            # 同时截断 out，确保 in + out < max_model_len（留 200 token 裕量给 chat 模板）
+            budget = max_model_len - in_len - 200
+            out_len = min(req['output_length'], max(1, budget))
             requests.append({
                 "t": req.get('timestamp', t),
                 "type": "n",
                 "model": "qwen-coder",
-                "in": req['input_length'],
-                "out": req['output_length'],
+                "in": in_len,
+                "out": out_len,
                 "hash_ids": req.get('hash_ids', [])
             })
             t = req.get('timestamp', t)
@@ -112,6 +116,8 @@ if __name__ == '__main__':
     parser.add_argument('--block-size', type=int, default=16)
     parser.add_argument('--max-sessions', type=int, default=None)
     parser.add_argument('--max-input-len', type=int, default=7680,
-                        help='过滤掉 input_length 超过此值的 session（默认 7680，为 max-model-len=8192 留 512 给输出）')
+                        help='过滤掉 input_length 超过此值的 session（默认 7680）')
+    parser.add_argument('--max-model-len', type=int, default=8192,
+                        help='vLLM max-model-len，输出长度截断为 max-model-len - input_length（默认 8192）')
     args = parser.parse_args()
-    convert(args.input, args.output_dir, args.block_size, args.max_sessions, args.max_input_len)
+    convert(args.input, args.output_dir, args.block_size, args.max_sessions, args.max_input_len, args.max_model_len)
