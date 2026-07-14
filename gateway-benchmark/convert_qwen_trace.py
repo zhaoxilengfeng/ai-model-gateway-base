@@ -36,7 +36,8 @@ def build_chains(rows):
             sessions.append(chain)
     return sessions
 
-def convert(input_file: str, output_dir: str, block_size: int = 16, max_sessions: int = None):
+def convert(input_file: str, output_dir: str, block_size: int = 16, max_sessions: int = None,
+            max_input_len: int = 7680):
     input_path = Path(input_file)
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
@@ -55,6 +56,13 @@ def convert(input_file: str, output_dir: str, block_size: int = 16, max_sessions
     sessions = build_chains(rows)
     if max_sessions:
         sessions = sessions[:max_sessions]
+
+    # 过滤超出 max_input_len 的 session（避免超出 vLLM max-model-len）
+    filtered = [s for s in sessions if all(r['input_length'] <= max_input_len for r in s)]
+    skipped = len(sessions) - len(filtered)
+    if skipped:
+        print(f"[INFO] 过滤掉 {skipped} 个含超长请求的 session（input_length > {max_input_len}）")
+    sessions = filtered
 
     print(f"总请求数: {len(rows)}，还原 session 数: {len(sessions)}")
 
@@ -103,5 +111,7 @@ if __name__ == '__main__':
     parser.add_argument('output_dir', help='Output directory for JSON files')
     parser.add_argument('--block-size', type=int, default=16)
     parser.add_argument('--max-sessions', type=int, default=None)
+    parser.add_argument('--max-input-len', type=int, default=7680,
+                        help='过滤掉 input_length 超过此值的 session（默认 7680，为 max-model-len=8192 留 512 给输出）')
     args = parser.parse_args()
-    convert(args.input, args.output_dir, args.block_size, args.max_sessions)
+    convert(args.input, args.output_dir, args.block_size, args.max_sessions, args.max_input_len)

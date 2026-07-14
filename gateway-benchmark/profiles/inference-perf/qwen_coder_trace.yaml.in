@@ -21,6 +21,7 @@ data:
     use_static_model: true
     static_model_name: REPLACE_ENV_LLMDBENCH_DEPLOY_CURRENT_MODEL
     default_block_size: 16
+    default_max_tokens: 512     # 限制输出长度，避免 input+output 超出 max-model-len=8192
     skip_invalid_files: true
     ignore_trace_delays: false
     trace_idle_gap_cap_seconds: 30.0
