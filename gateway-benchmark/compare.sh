@@ -162,17 +162,25 @@ RED   = chr(27) + '[31m'
 RESET = chr(27) + '[0m'
 
 def improve(a, b, lower_better=True):
-    if a == 0: return "    -    "
+    """返回 (visible_text, color) 元组，visible_text 固定9字符宽"""
+    if a == 0: return ("    -    ", "")
     diff = (b - a) / a * 100
     pct = f"{abs(diff):.1f}%"
     if lower_better:
-        if diff < 0:   return f"{GREEN}↓{pct}{RESET}".ljust(9 + len(GREEN) + len(RESET))
-        elif diff > 0: return f"{RED}↑{pct}{RESET}".ljust(9 + len(GREEN) + len(RESET))
-        else:          return "  0.0%   "
+        if diff < 0:   txt = f"↓{pct}"; color = GREEN
+        elif diff > 0: txt = f"↑{pct}"; color = RED
+        else:          return ("  0.0%   ", "")
     else:
-        if diff > 0:   return f"{GREEN}↑{pct}{RESET}".ljust(9 + len(GREEN) + len(RESET))
-        elif diff < 0: return f"{RED}↓{pct}{RESET}".ljust(9 + len(GREEN) + len(RESET))
-        else:          return "  0.0%   "
+        if diff > 0:   txt = f"↑{pct}"; color = GREEN
+        elif diff < 0: txt = f"↓{pct}"; color = RED
+        else:          return ("  0.0%   ", "")
+    return (txt.rjust(8), color)
+
+def fmt_improve(a, b, lower_better=True):
+    txt, color = improve(a, b, lower_better)
+    if color:
+        return f"{color}{txt}{RESET}"
+    return txt
 
 W = 18  # 指标名列宽（英文指标名最长约10字符，中文约14显示宽度）
 SEP = "─" * (W + 42)
@@ -218,10 +226,10 @@ for idx, stage in enumerate(common_stages):
         va = metric(sa_, *path) * scale
         vb = metric(sb_, *path) * scale
         if va == 0 and vb == 0: return
-        imp = improve(va, vb, lower_better)
+        imp = fmt_improve(va, vb, lower_better)
         va_s = f"{va:{fmt}}{unit}"
         vb_s = f"{vb:{fmt}}{unit}"
-        print(f"  {cjk_ljust(name, W)}  {va_s:>12}  {vb_s:>12}  {imp:>16}")
+        print(f"  {cjk_ljust(name, W)}  {va_s:>12}  {vb_s:>12}  {imp}")
 
     # 核心延迟指标（从 stage_N json）
     row("TTFT p50",   'latency','time_to_first_token','median')
@@ -236,10 +244,10 @@ for idx, stage in enumerate(common_stages):
     ntpot_a = metric(bra, 'normalized_time_per_output_token', 'p50') * 1000
     ntpot_b = metric(brb, 'normalized_time_per_output_token', 'p50') * 1000
     if ntpot_a > 0 or ntpot_b > 0:
-        imp = improve(ntpot_a, ntpot_b)
+        imp = fmt_improve(ntpot_a, ntpot_b)
         na_s = f"{ntpot_a:.1f}ms"
         nb_s = f"{ntpot_b:.1f}ms"
-        print(f"  {cjk_ljust('NTPOT p50', W)}  {na_s:>12}  {nb_s:>12}  {imp:>16}")
+        print(f"  {cjk_ljust('NTPOT p50', W)}  {na_s:>12}  {nb_s:>12}  {imp}")
 
     # 吞吐量
     row("输出 tok/s",  'throughput','output_tokens_per_sec', fmt=".0f", unit=" ", lower_better=False)
@@ -249,14 +257,14 @@ for idx, stage in enumerate(common_stages):
     hit_a = metric(obs_a, 'vllm_prefix_cache_hit_rate', 'mean') * 100
     hit_b = metric(obs_b, 'vllm_prefix_cache_hit_rate', 'mean') * 100
     if hit_a > 0 or hit_b > 0:
-        imp = improve(hit_a, hit_b, lower_better=False)
-        print(f"  {cjk_ljust('KV cache 命中率', W)}  {hit_a:>11.1f}%   {hit_b:>11.1f}%   {imp:>16}")
+        imp = fmt_improve(hit_a, hit_b, lower_better=False)
+        print(f"  {cjk_ljust('KV cache 命中率', W)}  {hit_a:>11.1f}%   {hit_b:>11.1f}%   {imp}")
 
     epp_a = metric(obs_a, 'inference_extension_prefix_indexer_hit_ratio', 'mean') * 100
     epp_b = metric(obs_b, 'inference_extension_prefix_indexer_hit_ratio', 'mean') * 100
     if epp_a > 0 or epp_b > 0:
-        imp = improve(epp_a, epp_b, lower_better=False)
-        print(f"  {cjk_ljust('EPP prefix 命中率', W)}  {epp_a:>11.1f}%   {epp_b:>11.1f}%   {imp:>16}")
+        imp = fmt_improve(epp_a, epp_b, lower_better=False)
+        print(f"  {cjk_ljust('EPP prefix 命中率', W)}  {epp_a:>11.1f}%   {epp_b:>11.1f}%   {imp}")
 
 print()
 print(f"  {SEP}")
