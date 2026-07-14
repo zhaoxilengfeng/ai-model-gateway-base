@@ -59,6 +59,17 @@ pull_ghcr_image \
   "agentgateway/agentgateway:v1.3.1" \
   "ghcr.io/agentgateway/agentgateway:v1.3.1"
 
+# kubelet 拉取镜像时会补全 docker.io/ 前缀，需提前打 tag 避免重复拉取
+echo "=== 5. Add docker.io prefix tags (for kubelet) ==="
+for img in vllm/vllm-openai:v0.23.0 vllm/vllm-openai-cpu:v0.23.0; do
+  if ! ctr -n k8s.io image ls 2>/dev/null | grep -qF "docker.io/$img"; then
+    ctr -n k8s.io image tag "$img" "docker.io/$img"
+    echo "  tagged: docker.io/$img"
+  else
+    echo "  已存在: docker.io/$img"
+  fi
+done
+
 echo ""
 echo "=== 镜像就绪 ==="
 ctr -n k8s.io image ls | grep -E "llm-d-router|vllm-openai|agentgateway" | awk '{print $1}'
