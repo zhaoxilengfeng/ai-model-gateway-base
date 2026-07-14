@@ -83,6 +83,7 @@ ANALYZE=false
 SKIP=false
 DEBUG=false
 METRICS_PORT=""
+WAIT_TIMEOUT=""
 EXTRA_ARGS=()
 
 while [[ $# -gt 0 ]]; do
@@ -95,6 +96,7 @@ while [[ $# -gt 0 ]]; do
         --proxy)            PROXY="$2";        shift 2 ;;
         --spec)             SPEC="$2";         shift 2 ;;
         --metrics-port)     METRICS_PORT="$2"; shift 2 ;;
+        --wait-timeout)     WAIT_TIMEOUT="$2"; shift 2 ;;
         --monitoring)       MONITORING=true;   shift ;;
         --analyze)          ANALYZE=true;      shift ;;
         --skip)             SKIP=true;         shift ;;
@@ -226,6 +228,7 @@ $MONITORING && CMD+=(--monitoring)
 $ANALYZE   && CMD+=(--analyze)
 $SKIP      && CMD+=(-z)
 $DEBUG     && CMD+=(-d)
+[[ -n "$WAIT_TIMEOUT" ]] && CMD+=(--wait-timeout "$WAIT_TIMEOUT")
 
 CMD+=("${EXTRA_ARGS[@]}")
 

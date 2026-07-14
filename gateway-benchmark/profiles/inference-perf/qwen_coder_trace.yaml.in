@@ -2,6 +2,7 @@ load:
   type: trace_session_replay
   stages:
     - concurrent_sessions: 4
+      num_sessions: 200           # 限制 session 数，避免单次运行时间过长
   worker_max_concurrency: 400
   base_seed: 42
 api:
