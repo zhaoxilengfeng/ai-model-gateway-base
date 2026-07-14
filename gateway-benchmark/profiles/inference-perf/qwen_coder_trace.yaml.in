@@ -5,7 +5,7 @@ load:
   worker_max_concurrency: 400
   base_seed: 42
 api:
-  type: completion
+  type: chat
   streaming: true
 server:
   type: vllm
