@@ -23,15 +23,15 @@ data:
   type: random
   input_distribution:
     min: 10
-    max: 8192
-    mean: 4096
-    std_dev: 2048
+    max: 1024
+    mean: 512
+    std_dev: 256
     total_count: 1000
   output_distribution:
     min: 10
-    max: 2048
-    mean: 1024
-    std_dev: 512
+    max: 512
+    mean: 256
+    std_dev: 128
     total_count: 1000
 report:
   request_lifecycle:
