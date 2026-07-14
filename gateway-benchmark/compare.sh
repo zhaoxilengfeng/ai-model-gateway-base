@@ -219,7 +219,9 @@ for idx, stage in enumerate(common_stages):
     ntpot_b = metric(brb, 'normalized_time_per_output_token', 'p50') * 1000
     if ntpot_a > 0 or ntpot_b > 0:
         imp = improve(ntpot_a, ntpot_b)
-        print(f"  {cjk_ljust('NTPOT p50', W)}  {ntpot_a:>11.1f}ms  {ntpot_b:>11.1f}ms  {imp:>8}")
+        na_s = f"{ntpot_a:.1f}ms"
+        nb_s = f"{ntpot_b:.1f}ms"
+        print(f"  {cjk_ljust('NTPOT p50', W)}  {na_s:>12}  {nb_s:>12}  {imp:>8}")
 
     # 吞吐量
     row("输出 tok/s",  'throughput','output_tokens_per_sec', fmt=".0f", unit=" ", lower_better=False)
