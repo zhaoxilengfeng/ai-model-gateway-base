@@ -166,6 +166,42 @@ else
     warn "找不到 vLLM pod（label: llm-d.ai/model=${MODEL}）"
 fi
 
+# --- 5. AgentGateway 状态 ---
+echo ""
+echo "▶ AgentGateway 状态"
+AGW_SVC=$(kubectl get svc -n agentgateway-system agentgateway \
+    -o jsonpath='{.spec.clusterIP}:{.spec.ports[?(@.name=="health")].port}' 2>/dev/null || echo "")
+if [[ -n "$AGW_SVC" ]]; then
+    AGW_IP="${AGW_SVC%%:*}"
+    AGW_PORT="${AGW_SVC##*:}"
+    AGW_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 \
+        "http://${AGW_IP}:${AGW_PORT}/readyz" 2>/dev/null || echo "000")
+    if [[ "$AGW_CODE" == "200" ]]; then
+        ok "agentgateway  http://${AGW_IP}:${AGW_PORT}/readyz  HTTP ${AGW_CODE}"
+        PASS=$((PASS+1))
+    else
+        fail "agentgateway  http://${AGW_IP}:${AGW_PORT}/readyz  HTTP ${AGW_CODE}"
+        FAIL=$((FAIL+1))
+    fi
+    # Pod 状态
+    while IFS= read -r line; do
+        name=$(echo "$line" | awk '{print $1}')
+        ready=$(echo "$line" | awk '{print $2}')
+        status=$(echo "$line" | awk '{print $3}')
+        if [[ "$status" == "Running" ]]; then
+            ok "$name  ($ready)  $status"
+            PASS=$((PASS+1))
+        elif [[ "$status" == "Completed" || "$status" == "Succeeded" ]]; then
+            warn "$name  ($ready)  $status  (已完成)"
+        else
+            fail "$name  ($ready)  $status"
+            FAIL=$((FAIL+1))
+        fi
+    done < <(kubectl get pods -n agentgateway-system --no-headers 2>/dev/null | grep -v "^$" || true)
+else
+    warn "agentgateway-system namespace 中未找到 agentgateway 服务（跳过）"
+fi
+
 # --- 汇总 ---
 echo ""
 TOTAL=$((PASS+FAIL))
