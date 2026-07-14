@@ -12,8 +12,9 @@ aibrix:
   namespace: "PLACEHOLDER_NAMESPACE"
 
 defaults:
-  harness: inference-perf        # inference-perf | guidellm
+  harness: inference-perf        # inference-perf | guidellm | vllm-benchmark
   workload: sweep_chatbot.yaml   # profiles/<harness>/ 下的文件名（不含 .in 后缀）
   parallelism: 1                 # 并行 harness pod 数
   data_access_timeout: 600       # 等待 harness data-access pod 就绪的超时（秒）
                                  # 首次运行需拉取镜像，建议设 600s 以上
+  metrics_port: 8000             # vLLM metrics 端口（llmdbenchmark 默认 8200，我们用 8000）
