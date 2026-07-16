@@ -165,3 +165,72 @@ kubectl patch deployment agentgateway -n agentgateway-system --type=json -p='[
 kubectl get pod -n agentgateway-system -o wide
 # NODE 列应为 master01
 ```
+
+
+### nvidia device plugin 无法发现 GPU（node 缺少 nvidia.com/gpu 资源）
+
+**现象**：vLLM pod 一直 Pending，`kubectl describe pod` 显示：
+```
+0/2 nodes are available: 2 Insufficient nvidia.com/gpu
+```
+`kubectl get node h200-xx -o yaml | grep gpu` 输出空，Capacity/Allocatable 里无 `nvidia.com/gpu`。
+
+nvidia device plugin 日志：
+```
+E factory.go:112] Incompatible strategy detected auto
+E factory.go:113] If this is a GPU node, did you configure the NVIDIA Container Toolkit?
+I main.go:381] No devices found. Waiting indefinitely.
+```
+
+**根因**：`nvidia-container-runtime` 二进制已安装，但 containerd 未配置使用它，device plugin 无法通过 containerd 发现 GPU。
+
+**修复命令**（在 GPU 节点上执行）：
+```bash
+# 自动注入 nvidia runtime 到 containerd 配置
+nvidia-ctk runtime configure --runtime=containerd
+
+# 重启 containerd 使配置生效
+systemctl restart containerd
+
+# 重启 device plugin 重新发现 GPU
+kubectl rollout restart daemonset nvidia-device-plugin-daemonset -n kube-system
+
+# 验证 GPU 资源已上报
+kubectl get node <gpu-node> -o jsonpath='{.status.allocatable.nvidia\.com/gpu}'
+# 预期输出: 1 (或更多)
+```
+
+**验证**：
+```bash
+kubectl get nodes -o custom-columns='NODE:.metadata.name,GPU:.status.allocatable.nvidia\.com/gpu'
+```
+
+---
+
+### calico BPF 模式切换到 iptables 后 pod 无法访问 ClusterIP
+
+**现象**：pod 内访问 `https://10.96.0.1:443` 超时，日志：
+```
+dial tcp 10.96.0.1:443: i/o timeout
+```
+
+**根因**：calico 从 BPF 模式切换到 iptables 模式后，felix 配置中残留了：
+- `bpfConnectTimeLoadBalancing: TCP`
+- `bpfHostNetworkedNATWithoutCTLB: Enabled`
+
+这两个 BPF 配置在 iptables 模式下干扰 NAT 行为，导致 pod 内连接无法正确建立。
+
+**修复命令**：
+```bash
+kubectl patch felixconfiguration default --type=merge -p '{
+  "spec": {
+    "bpfConnectTimeLoadBalancing": "Disabled",
+    "bpfHostNetworkedNATWithoutCTLB": "Disabled"
+  }
+}'
+```
+
+**验证**：
+```bash
+kubectl get felixconfiguration default -o yaml | grep bpf
+```
