@@ -105,3 +105,63 @@ curl http://${NODE_IP}:${NODE_PORT}/v1/chat/completions \
 ```
 
 请求路径：NodePort → agentgateway proxy → HTTPRoute → InferencePool → EPP（精准前缀选路）→ vLLM pod
+
+
+---
+
+## 常见问题排查
+
+### agentgateway controller 启动报 `dial tcp 10.96.0.1:443: i/o timeout`
+
+**现象**：agentgateway pod 持续 CrashLoopBackOff，日志：
+
+```
+Error: err in main: Get "https://10.96.0.1:443/api/v1/namespaces/agentgateway-system/secrets/kgateway-xds-cert": dial tcp 10.96.0.1:443: i/o timeout
+```
+
+**根因**：calico bird 将本机 pod CIDR 写成了 blackhole 路由，导致本机 pod 无法访问 ClusterIP（10.96.0.1）。
+
+**排查命令**：
+
+```bash
+# 查看是否存在 blackhole 路由
+ip route | grep blackhole
+# 预期看到类似：blackhole 172.31.112.128/26 proto bird
+```
+
+**修复命令**：
+
+```bash
+# 删除 blackhole 路由（将网段替换为实际值）
+ip route del blackhole 172.31.112.128/26
+
+# 验证删除
+ip route | grep blackhole
+
+# 强制重建 agentgateway pod
+kubectl delete pod -n agentgateway-system -l app.kubernetes.io/name=agentgateway
+```
+
+> 注意：此 blackhole 路由在节点重启或 calico bird 重新收敛后可能复现。若频繁出现，需排查 calico IPAM block 分配与节点路由通告是否冲突。
+
+---
+
+### agentgateway 必须调度到 control-plane 节点（不得调度到 GPU 节点）
+
+agentgateway-system 的 pod 应固定在 master01，不要占用 GPU worker 节点资源。
+
+**一次性 patch 命令**：
+
+```bash
+kubectl patch deployment agentgateway -n agentgateway-system --type=json -p='[
+  {"op":"add","path":"/spec/template/spec/nodeSelector","value":{"kubernetes.io/hostname":"master01"}},
+  {"op":"add","path":"/spec/template/spec/tolerations","value":[{"key":"node-role.kubernetes.io/control-plane","operator":"Exists","effect":"NoSchedule"}]}
+]'
+```
+
+**验证**：
+
+```bash
+kubectl get pod -n agentgateway-system -o wide
+# NODE 列应为 master01
+```
