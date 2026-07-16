@@ -121,3 +121,43 @@ rsync -a --progress src/ dst/
 - 集群：master01（116.198.67.18）+ h200-12-3（11.194.12.3，NVIDIA H200 144G）
 - 模型：Qwen2.5-7B-Instruct，存放于 h200-12-3 的 `/root/models/hub/models--Qwen--Qwen2.5-7B-Instruct`
 - 部署脚本目录：`/root/ai-model-gateway-base/llm-d/deploy-precise-prefix-gateway/`
+
+---
+
+## 问题六：H200 CUDA Error 802 — NVSwitch Fabric 未初始化
+
+### 现象
+容器内 `torch.cuda.is_available()` 返回 `False`，`cuInit(0)` 返回 802：
+```
+CUDA initialization: Unexpected error from cudaGetDeviceCount(). Error 802: system not yet initialized
+```
+宿主机上 `nvidia-smi` 正常，但 `cuInit` 同样返回 802。
+
+### 根因
+H200 是 NVSwitch 多 GPU 架构，必须运行 `nvidia-fabricmanager` 服务才能完成 GPU Fabric 初始化。
+Fabric 未就绪时 `nvidia-smi -q` 显示 `Fabric: State: In Progress`，CUDA 驱动拒绝初始化。
+
+### 修复命令
+```bash
+# 从 NVIDIA 官方 CUDA repo 下载与驱动版本精确匹配的 fabricmanager
+# 注意：ubuntu 22.04 和 24.04 包名不同，包名是 nvidia-fabricmanager（不带版本后缀）
+curl -fsSL \
+  https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/nvidia-fabricmanager_580.126.20-1_amd64.deb \
+  -o /tmp/nvidia-fabricmanager_580.126.20.deb
+
+dpkg -i /tmp/nvidia-fabricmanager_580.126.20.deb
+systemctl enable nvidia-fabricmanager
+systemctl start nvidia-fabricmanager
+
+# 验证 Fabric 就绪
+nvidia-smi -q | grep -A3 Fabric | grep State
+# 预期: State: Completed
+
+# 验证 CUDA 可用
+python3 -c "import ctypes; lib=ctypes.CDLL('libcuda.so.1'); print('cuInit:', lib.cuInit(0))"
+# 预期: cuInit: 0
+```
+
+> 注意：fabricmanager 版本必须与驱动版本精确匹配（如驱动 580.126.20 → fabricmanager 580.126.20）。
+> 可在 https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/Packages.gz 中搜索对应版本。
+> fabricmanager 需要设置为开机自启，否则重启后 CUDA 再次无法初始化。
