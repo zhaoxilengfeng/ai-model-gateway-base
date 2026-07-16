@@ -44,6 +44,8 @@ spec:
       labels:
         app: ${MODEL_NAME}
         model-framework: sglang
+        llm-d.ai/guide: precise-prefix-cache-routing
+        llm-d.ai/engine-type: sglang
     spec:
       nodeSelector:
         kubernetes.io/hostname: h200-12-3
@@ -60,7 +62,7 @@ spec:
         - "--model-path=${MODEL_PATH}"
         - "--served-model-name=${SERVED_MODEL}"
         - "--host=0.0.0.0"
-        - "--port=30000"
+        - "--port=8000"
         - "--tp=${TP_SIZE}"
         - "--context-length=${MAX_MODEL_LEN}"
         - "--mem-fraction-static=${GPU_MEMORY_UTIL}"
@@ -77,7 +79,7 @@ spec:
           value: "1"
         ports:
         - name: http
-          containerPort: 30000
+          containerPort: 8000
         resources:
           limits:
             nvidia.com/gpu: "${TP_SIZE}"
@@ -85,23 +87,26 @@ spec:
             nvidia.com/gpu: "${TP_SIZE}"
             memory: "32Gi"
         startupProbe:
+          timeoutSeconds: 30
           httpGet:
             path: /health
-            port: 30000
+            port: 8000
           initialDelaySeconds: 60
           periodSeconds: 20
           failureThreshold: 60
         readinessProbe:
+          timeoutSeconds: 30
           httpGet:
             path: /health
-            port: 30000
+            port: 8000
           initialDelaySeconds: 120
           periodSeconds: 15
           failureThreshold: 10
         livenessProbe:
+          timeoutSeconds: 30
           httpGet:
             path: /health
-            port: 30000
+            port: 8000
           initialDelaySeconds: 180
           periodSeconds: 30
         volumeMounts:
@@ -130,8 +135,8 @@ spec:
     app: ${MODEL_NAME}
   ports:
   - name: http
-    port: 30000
-    targetPort: 30000
+    port: 8000
+    targetPort: 8000
     nodePort: ${HOST_PORT}
     protocol: TCP
 EOF
