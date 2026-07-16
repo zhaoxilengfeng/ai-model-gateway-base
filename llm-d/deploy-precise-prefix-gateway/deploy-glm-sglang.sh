@@ -45,6 +45,8 @@ spec:
         app: ${MODEL_NAME}
         model-framework: sglang
     spec:
+      nodeSelector:
+        kubernetes.io/hostname: h200-12-3
       tolerations:
       - key: nvidia.com/gpu
         operator: Exists
@@ -60,7 +62,7 @@ spec:
         - "--host=0.0.0.0"
         - "--port=30000"
         - "--tp=${TP_SIZE}"
-        - "--max-model-len=${MAX_MODEL_LEN}"
+        - "--context-length=${MAX_MODEL_LEN}"
         - "--mem-fraction-static=${GPU_MEMORY_UTIL}"
         - "--trust-remote-code"
         - "--chat-template=${MODEL_PATH}/chat_template.jinja"
