@@ -94,15 +94,18 @@ spec:
             memory: "16Gi"
         startupProbe:
           httpGet: {path: /health, port: 8000}
+          timeoutSeconds: 30
           initialDelaySeconds: 30
           periodSeconds: 15
           failureThreshold: 40
         readinessProbe:
           httpGet: {path: /health, port: 8000}
+          timeoutSeconds: 30
           initialDelaySeconds: 60
           periodSeconds: 10
         livenessProbe:
           httpGet: {path: /health, port: 8000}
+          timeoutSeconds: 30
           initialDelaySeconds: 120
           periodSeconds: 30
         volumeMounts:
