@@ -32,6 +32,12 @@ OUTPUT_MEAN="${OUTPUT_MEAN:-256}"
 OUTPUT_MAX="${OUTPUT_MAX:-512}"
 # TTFT p99 SLO（毫秒）：超过此值视为"延迟不可接受"
 TTFT_P99_SLO="${SLO:-1000}"
+# 数据类型：random（随机输入）| shared_prefix（共享前缀，测 KV cache 收益）
+DATA_TYPE="${DATA_TYPE:-random}"
+# shared_prefix 场景参数
+SP_NUM_GROUPS="${SP_NUM_GROUPS:-32}"
+SP_PROMPTS_PER_GROUP="${SP_PROMPTS_PER_GROUP:-32}"
+SP_SYSTEM_LEN="${SP_SYSTEM_LEN:-512}"
 DRY_RUN=false
 
 while [[ $# -gt 0 ]]; do
@@ -41,6 +47,9 @@ while [[ $# -gt 0 ]]; do
     --input-mean)   INPUT_MEAN="$2"; shift 2 ;;
     --output-mean)  OUTPUT_MEAN="$2"; shift 2 ;;
     --slo)          TTFT_P99_SLO="$2"; shift 2 ;;
+    --data-type)    DATA_TYPE="$2"; shift 2 ;;
+    --sp-groups)    SP_NUM_GROUPS="$2"; shift 2 ;;
+    --sp-system-len) SP_SYSTEM_LEN="$2"; shift 2 ;;
     --dry-run)      DRY_RUN=true; shift ;;
     *) shift ;;
   esac
@@ -69,6 +78,8 @@ echo "  并发阶梯:    $CONCURRENCY_STEPS"
 echo "  每阶段请求:  $REQUESTS_PER_STEP"
 echo "  Input mean:  $INPUT_MEAN tokens"
 echo "  Output mean: $OUTPUT_MEAN tokens"
+echo "  Data type:   $DATA_TYPE"
+[[ "$DATA_TYPE" == "shared_prefix" ]] && echo "  SP config:   ${SP_NUM_GROUPS}g x ${SP_PROMPTS_PER_GROUP}p, system=${SP_SYSTEM_LEN}tok, question=${INPUT_MEAN}tok, output=${OUTPUT_MEAN}tok"
 echo "  TTFT p99 SLO: ${TTFT_P99_SLO}ms"
 echo "=============================================="
 
@@ -101,18 +112,11 @@ server:
   ignore_eos: true
 tokenizer:
   pretrained_model_name_or_path: /requests/tokenizer
-data:
-  type: random
-  input_distribution:
-    min: 128
-    max: ${INPUT_MAX}
-    mean: ${INPUT_MEAN}
-    std: 256
-  output_distribution:
-    min: 64
-    max: ${OUTPUT_MAX}
-    mean: ${OUTPUT_MEAN}
-    std: 64
+$(if [[ "$DATA_TYPE" == "shared_prefix" ]]; then
+printf "data:\n  type: shared_prefix\n  shared_prefix:\n    num_groups: ${SP_NUM_GROUPS}\n    num_prompts_per_group: ${SP_PROMPTS_PER_GROUP}\n    system_prompt_len: ${SP_SYSTEM_LEN}\n    question_len: ${INPUT_MEAN}\n    output_len: ${OUTPUT_MEAN}"
+else
+printf "data:\n  type: random\n  input_distribution:\n    min: 128\n    max: ${INPUT_MAX}\n    mean: ${INPUT_MEAN}\n    std: 256\n  output_distribution:\n    min: 64\n    max: ${OUTPUT_MAX}\n    mean: ${OUTPUT_MEAN}\n    std: 64"
+fi)
 report:
   request_lifecycle:
     summary: true
