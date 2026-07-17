@@ -161,7 +161,7 @@ python3 - "$WORKSPACE" "$SLO" "${CONCURRENCY_STEPS}" << 'PYEOF'
 import json, glob, sys
 
 workspace, slo_ms, conc_str = sys.argv[1], float(sys.argv[2]), sys.argv[3]
-steps = conc_str.split(',')
+fallback_steps = conc_str.split(',')
 
 result_dir = sorted(glob.glob(f'{workspace}/root-*/results/*_1'))
 if not result_dir:
@@ -170,13 +170,32 @@ if not result_dir:
 result_dir = result_dir[0]
 stages = sorted(glob.glob(f'{result_dir}/stage_*_lifecycle_metrics.json'))
 
+# 从 workload yaml 读取真实 concurrency_level 或 rate
+steps = []
+for wf in sorted(glob.glob(f'{result_dir}/*.yaml')):
+    try:
+        import yaml as _yaml
+        with open(wf) as _f:
+            wd = _yaml.safe_load(_f)
+        stgs = (wd.get("load") or {}).get("stages", [])
+        if stgs and isinstance(stgs[0], dict):
+            if "concurrency_level" in stgs[0]:
+                steps = [str(s["concurrency_level"])+"c" for s in stgs]
+                break
+            elif "rate" in stgs[0]:
+                steps = [str(s["rate"])+" QPS" for s in stgs]
+                break
+    except: pass
+if not steps:
+    steps = fallback_steps
+
 print()
 print('='*90)
 print('  TPM 测量结果')
 print(f'  TTFT p99 SLO = {slo_ms:.0f}ms  (超过此值视为延迟不可接受)')
 print('='*90)
-print(f'  {"并发":>5} {"成功/失败":>10} {"output tok/s":>14} {"output TPM":>12} {"total TPM":>12} {"TTFT p50":>10} {"TTFT p99":>10} {"状态":>12}')
-print(f'  {"-"*85}')
+print(f'  {"并发/QPS":>8} {"成功/失败":>10} {"output tok/s":>14} {"output TPM":>12} {"total TPM":>12} {"TTFT p50":>10} {"TTFT p99":>10} {"状态":>12}')
+print(f'  {"-"*88}')
 
 results = []
 for i, sf in enumerate(stages):
@@ -211,7 +230,7 @@ for i, sf in enumerate(stages):
     results.append(dict(conc=conc, out_tpm=out_tpm, total_tpm=total_tpm,
                         ttft_p50=ttft_p50, ttft_p99=ttft_p99, status=status,
                         slo_ok=slo_ok, ok=ok, fail=fail))
-    print(f'  {conc+"c":>5} {str(ok)+"/"+str(fail):>10} {out_tps:>14.0f} {out_tpm:>12.0f} {total_tpm:>12.0f} {ttft_p50:>10.0f} {ttft_p99:>10.0f} {status:>12}')
+    print(f'  {conc:>8} {str(ok)+"/"+str(fail):>10} {out_tps:>14.0f} {out_tpm:>12.0f} {total_tpm:>12.0f} {ttft_p50:>10.0f} {ttft_p99:>10.0f} {status:>12}')
 
 # 有效 TPM = SLO 内的最高 output TPM
 valid = [r for r in results if r['slo_ok'] and r['fail'] == 0]

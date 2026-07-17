@@ -196,11 +196,67 @@ print(f"  {cjk_ljust('指标', W)}  {la_hdr}  {lb_hdr}  {'变化(绿↓/↑=改�
 print(f"  {SEP}")
 
 common_stages = sorted(set(stages_a) & set(stages_b))
+
+def get_stage_labels(loc):
+    """从结果目录名或 workload yaml 中提取 stage 标签"""
+    labels = {}
+    try:
+        import yaml as _yaml
+    except ImportError:
+        return labels
+    # 1. 尝试目录名（如 inference-perf-rate4-... 或 inference-perf-override-...）
+    import re as _re, os as _os
+    dirname = _os.path.basename(loc)
+    m = _re.search(r"-(rate(\d+)|qlen(\d+))-", dirname)
+    if m:
+        # 这是单 treatment 的结果目录，stage 标签无法从目录名推断多个
+        pass
+    # 2. 从 workload yaml（本目录及父级目录）搜索
+    if location_is_ssh(loc):
+        search_dirs = [loc]
+    else:
+        # 向上找4层
+        d = loc
+        search_dirs = []
+        for _ in range(5):
+            search_dirs.append(d)
+            p = _os.path.dirname(d)
+            if p == d: break
+            d = p
+    for sd in search_dirs:
+        for wf in sorted(list_files(sd, "*.yaml") + list_files(sd, "*.yaml.in")):
+            content = read_file(sd, wf)
+            if not content or "stages" not in content: continue
+            if "rate:" not in content and "concurrency_level:" not in content: continue
+            try:
+                import yaml as _yaml
+                wd = _yaml.safe_load(content)
+                if not isinstance(wd, dict): continue
+                stgs = (wd.get("load") or {}).get("stages", [])
+                for si, st in enumerate(stgs):
+                    if not isinstance(st, dict): continue
+                    if "concurrency_level" in st:
+                        labels[si] = str(st["concurrency_level"]) + "c"
+                    elif "rate" in st:
+                        labels[si] = str(st["rate"]) + " QPS"
+                if labels: return labels
+            except: pass
+    return labels
+
+def location_is_ssh(loc):
+    return loc.startswith("ssh:")
+
+labels_a = get_stage_labels(loc_a)
+labels_b = get_stage_labels(loc_b)
+
 rates = []
-for i in common_stages:
-    succ = metric(stages_a[i], 'successes', 'count')
-    rate = round(succ / 120) if succ else i + 1
-    rates.append(rate)
+for idx, i in enumerate(common_stages):
+    label = labels_a.get(i) or labels_b.get(i) or ""
+    if not label or "None" in label:
+        succ = metric(stages_a[i], "successes", "count")
+        bt = metric(stages_a[i], "benchmark_time_seconds")
+        label = f"{round(succ/bt)} QPS" if (bt > 0 and succ > 0) else f"stage{i}"
+    rates.append(label)
 
 for idx, stage in enumerate(common_stages):
     da = stages_a[stage]
@@ -217,7 +273,7 @@ for idx, stage in enumerate(common_stages):
     obs_b = get_observability(loc_b, stage)
 
     rate = rates[idx]
-    print(f"\n  ── rate={rate} QPS {'─'*50}")
+    print("\n  " + u"\u2500"*3 + " " + str(rates[idx]) + " " + u"\u2500"*48)
     succ_a, succ_b = int(sa.get('count', 0)), int(sb.get('count', 0))
     fa_i, fb_i = int(fa), int(fb)
     sf_a = f"{succ_a}/{fa_i}"

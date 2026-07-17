@@ -126,28 +126,51 @@ if not stages:
 # 读取 run_metadata
 meta = read_json(loc, "run_metadata.json") or {}
 
-# 推断各 stage 的 rate（从 run_metadata 里的 workload 配置读，fallback 到 succ/duration）
-rates = {}
-# 先尝试从 workload yaml 文件读 stage 配置
-workload_files = list_files(loc, "*.yaml") + list_files(loc, "*.yaml.in")
-stage_durations = {}
-for wf in workload_files:
-    content = read_file(loc, wf)
-    if 'stages' in content and 'rate' in content:
-        try:
-            import yaml as _yaml
-            wdata = _yaml.safe_load(content)
-            stgs = (wdata.get('load') or {}).get('stages', [])
-            for si, st in enumerate(stgs):
-                if isinstance(st, dict):
-                    stage_durations[si] = st.get('duration', 120)
-        except: pass
-        break
+# 从 workload yaml 里读取 stage 标签（搜索本目录及父级目录）
+stage_labels = {}
+import os as _os
+try:
+    import yaml as _yaml
+except ImportError:
+    _yaml = None
+search_path = loc if not loc.startswith("ssh:") else None
+if search_path:
+    d = search_path
+    for _ in range(6):  # 最多向上找6层
+        if not _yaml: break
+        for wf in sorted(glob.glob(_os.path.join(d, "*.yaml")) + glob.glob(_os.path.join(d, "*.yaml.in"))):
+            try:
+                with open(wf) as _wf:
+                    wdata = _yaml.safe_load(_wf)
+                if not isinstance(wdata, dict): continue
+                load_val = wdata.get("load")
+                if isinstance(load_val, list):
+                    stgs = load_val  # load 直接是 stages 列表
+                elif isinstance(load_val, dict):
+                    stgs = load_val.get("stages", [])
+                else:
+                    stgs = []
+                for si, st in enumerate(stgs):
+                    if not isinstance(st, dict): continue
+                    if "concurrency_level" in st:
+                        stage_labels[si] = str(st["concurrency_level"]) + "c"
+                    elif "rate" in st:
+                        stage_labels[si] = str(st["rate"]) + " QPS"
+                if stage_labels: break
+            except: pass
+        if stage_labels: break
+        parent = _os.path.dirname(d)
+        if parent == d: break
+        d = parent
 
+# fallback：用 requests/benchmark_time 估算 QPS
 for i, d in stages.items():
-    succ = m(d, 'successes', 'count')
-    dur = stage_durations.get(i, 120)
-    rates[i] = round(succ / dur) if succ and dur else i+1
+    if i not in stage_labels or "None" in str(stage_labels.get(i,"")):
+        bt = m(d, "benchmark_time_seconds")
+        succ = m(d, "successes", "count")
+        stage_labels[i] = f"{round(succ/bt)} QPS" if (bt > 0 and succ > 0) else f"stage{i}"
+
+rates = stage_labels  # 兼容后续引用
 
 print()
 print("╔══════════════════════════════════════════════════════╗")
@@ -197,7 +220,7 @@ for i, d in sorted(stages.items()):
     e2e50  = fmt_s(m(sa, 'latency', 'request_latency', 'median'))
     tps    = m(sa, 'throughput', 'output_tokens_per_sec')
     sf = f"{succ}/{int(fa)}"
-    print(f"  │  {i:<6} {rate:>4}  {sf:>10}  {ttft50:>9}  {ttft99:>9}  {tpot50:>9}  {e2e50:>8}  {tps:>7.0f}  │")
+    print(f"  │  {i:<6} {rate:>6}  {sf:>10}  {ttft50:>9}  {ttft99:>9}  {tpot50:>9}  {e2e50:>8}  {tps:>7.0f}  │")
 
 print(f"  └───────────────────────────────────────────────────────────────────────┘")
 print()
@@ -209,7 +232,7 @@ max_ttft = max(ttft_vals) if ttft_vals else 1
 for i, (stage, ttft) in enumerate(zip(sorted(stages), ttft_vals)):
     rate = rates[stage]
     b = bar(ttft, max_ttft, width=30)
-    print(f"  │  {rate:>2} QPS  {b}  {fmt_ms(ttft):>8}  │")
+    print(f"  │  {str(rate):>8}  {b}  {fmt_ms(ttft):>8}  │")
 print(f"  └──────────────────────────────────────────────────────┘")
 print()
 
@@ -220,7 +243,7 @@ max_tps = max(tps_vals) if tps_vals else 1
 for i, (stage, tps) in enumerate(zip(sorted(stages), tps_vals)):
     rate = rates[stage]
     b = bar(tps, max_tps, width=30, char="▓")
-    print(f"  │  {rate:>2} QPS  {b}  {tps:>7.0f}  │")
+    print(f"  │  {str(rate):>8}  {b}  {tps:>7.0f}  │")
 print(f"  └──────────────────────────────────────────────────────┘")
 print()
 
