@@ -1,95 +1,122 @@
 #!/usr/bin/env bash
-# warmup-images.sh — 将 llmdbenchmark harness 镜像预推到阿里云，加速节点拉取
+# warmup-images.sh — 将 llmdbenchmark harness 镜像预拉取到 K8s 节点
 #
-# llmdbenchmark 在 K8s 内起 harness pod，使用 ghcr.io/llm-d/llm-d-benchmark:v0.7.0。
-# 首次运行时节点需从 ghcr.io 拉取，速度较慢（可能超时）。
-# 本脚本通过代理将镜像复制到阿里云 registry，之后节点从阿里云拉取速度更快。
+# harness pod 使用 ghcr.io/llm-d/llm-d-benchmark:v0.7.0（3GB），
+# GPU 节点（h200-12-3）无法直连 ghcr.io，通过以下方式预拉取：
 #
-# 用法:
-#   bash warmup-images.sh                         # 使用默认配置
-#   PROXY=socks5://127.0.0.1:1080 bash warmup-images.sh
-#   ALIYUN_NS=your-namespace bash warmup-images.sh
+#   方式一（推荐）：daocloud mirror（国内直连速度快）
+#     bash warmup-images.sh
+#
+#   方式二：privoxy HTTP 代理（通过 master 的 SOCKS5 转发）
+#     PROXY_MODE=privoxy bash warmup-images.sh
+#
+# 拉取后自动将镜像复制到 k8s.io namespace，供 kubelet 使用。
+#
+# 用法：
+#   bash warmup-images.sh                     # daocloud 方式（默认）
+#   PROXY_MODE=privoxy bash warmup-images.sh  # 代理方式
+#   TARGET_NODE=11.194.12.3 bash warmup-images.sh
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LLMDBENCH_DIR="${LLMDBENCH_DIR:-/root/llm-d-benchmark}"
-
-PROXY="${PROXY:-socks5://127.0.0.1:1080}"
-ALIYUN_REGISTRY="${ALIYUN_REGISTRY:-registry.cn-hangzhou.aliyuncs.com}"
-ALIYUN_NS="${ALIYUN_NS:-airouter}"
-DOCKER_AUTH="${DOCKER_AUTH:-${HOME}/.docker/config.json}"
-
+TARGET_NODE="${TARGET_NODE:-11.194.12.3}"
+PROXY_MODE="${PROXY_MODE:-daocloud}"
 BENCHMARK_IMAGE="ghcr.io/llm-d/llm-d-benchmark:v0.7.0"
-ALIYUN_IMAGE="${ALIYUN_REGISTRY}/${ALIYUN_NS}/llm-d-benchmark:v0.7.0"
+DAOCLOUD_IMAGE="m.daocloud.io/ghcr.io/llm-d/llm-d-benchmark:v0.7.0"
+MASTER_INTERNAL_IP="${MASTER_IP:-11.194.10.4}"
+SOCKS5_PORT="${SOCKS5_PORT:-1080}"
+PRIVOXY_PORT="${PRIVOXY_PORT:-8118}"
 
-# 检查依赖
-for cmd in skopeo kubectl; do
-    if ! command -v "$cmd" &>/dev/null; then
-        echo "[ERROR] '$cmd' not found" >&2
+SSH="ssh -o StrictHostKeyChecking=no root@${TARGET_NODE}"
+
+echo "=== warmup-images: 目标节点 ${TARGET_NODE} ==="
+echo "  拉取方式: ${PROXY_MODE}"
+echo "  镜像:     ${BENCHMARK_IMAGE}"
+echo ""
+
+# --- 检查是否已经存在 ---
+if $SSH "ctr -n k8s.io image ls 2>/dev/null | grep -q llm-d-benchmark"; then
+    echo "  ✓ 镜像已存在于 k8s.io namespace，跳过拉取"
+    exit 0
+fi
+
+pull_via_daocloud() {
+    echo "  使用 daocloud mirror 拉取..."
+    if $SSH "ctr image ls 2>/dev/null | grep -q llm-d-benchmark"; then
+        echo "  ✓ 镜像已在默认 namespace，直接复制到 k8s.io..."
+    else
+        $SSH "ctr images pull ${DAOCLOUD_IMAGE} 2>&1 | tail -5" || {
+            echo "  [ERROR] daocloud 拉取失败，尝试代理方式"
+            return 1
+        }
+    fi
+}
+
+pull_via_privoxy() {
+    echo "  配置 privoxy 代理 (${MASTER_INTERNAL_IP}:${PRIVOXY_PORT})..."
+
+    # 检查 privoxy 是否在 master 上运行
+    if ! ss -tlnp 2>/dev/null | grep -q "${PRIVOXY_PORT}"; then
+        echo "  启动 privoxy..."
+        if ! command -v privoxy &>/dev/null; then
+            echo "  [ERROR] privoxy 未安装，请运行: apt-get install -y privoxy"
+            return 1
+        fi
+        cat > /etc/privoxy/config-custom.conf << EOF
+listen-address  ${MASTER_INTERNAL_IP}:${PRIVOXY_PORT}
+forward-socks5  /  127.0.0.1:${SOCKS5_PORT}  .
+EOF
+        chmod 644 /etc/privoxy/config-custom.conf
+        nohup privoxy /etc/privoxy/config-custom.conf 2>/dev/null &
+        sleep 2
+    fi
+
+    # 配置 GPU 节点 containerd HTTP proxy
+    $SSH "
+mkdir -p /etc/systemd/system/containerd.service.d
+cat > /etc/systemd/system/containerd.service.d/http-proxy.conf << PROXYEOF
+[Service]
+Environment=\"HTTPS_PROXY=http://${MASTER_INTERNAL_IP}:${PRIVOXY_PORT}\"
+Environment=\"HTTP_PROXY=http://${MASTER_INTERNAL_IP}:${PRIVOXY_PORT}\"
+Environment=\"NO_PROXY=localhost,127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,11.0.0.0/8\"
+PROXYEOF
+systemctl daemon-reload
+systemctl restart containerd
+sleep 3
+ctr images pull ${BENCHMARK_IMAGE} 2>&1 | tail -5
+"
+}
+
+# --- 拉取镜像 ---
+case "$PROXY_MODE" in
+    daocloud) pull_via_daocloud || pull_via_privoxy ;;
+    privoxy)  pull_via_privoxy ;;
+    *)
+        echo "[ERROR] 未知 PROXY_MODE: $PROXY_MODE (支持 daocloud|privoxy)"
+        exit 1
+        ;;
+esac
+
+# --- 复制到 k8s.io namespace ---
+echo ""
+echo "  复制镜像到 k8s.io namespace（供 kubelet 使用）..."
+$SSH '
+if ctr -n k8s.io image ls 2>/dev/null | grep -q llm-d-benchmark; then
+    echo "  ✓ 已在 k8s.io namespace"
+else
+    IMG=$(ctr image ls 2>/dev/null | grep llm-d-benchmark | awk "{print \$1}" | head -1)
+    if [[ -n "$IMG" ]]; then
+        ctr image export - "$IMG" | ctr -n k8s.io image import - 2>&1 | tail -3
+        echo "  ✓ 已导入到 k8s.io namespace"
+    else
+        echo "[ERROR] 未找到已拉取的镜像"
         exit 1
     fi
-done
-
-# --- 1. 复制镜像到阿里云 ---
-echo "=== 1. 复制 harness 镜像到阿里云 ==="
-echo "  源:    $BENCHMARK_IMAGE"
-echo "  目标:  $ALIYUN_IMAGE"
-echo "  代理:  $PROXY"
-echo ""
-
-if https_proxy="$PROXY" skopeo inspect "docker://${ALIYUN_IMAGE}" \
-    --authfile "$DOCKER_AUTH" &>/dev/null; then
-    echo "  镜像已存在，跳过复制。"
-else
-    echo "  正在复制（镜像较大，约需 3-5 分钟）..."
-    https_proxy="$PROXY" skopeo copy \
-        "docker://${BENCHMARK_IMAGE}" \
-        "docker://${ALIYUN_IMAGE}" \
-        --authfile "$DOCKER_AUTH"
-    echo "  复制完成: $ALIYUN_IMAGE"
 fi
+'
 
-# --- 2. Patch 节点 containerd 配置，将 ghcr.io/llm-d 重定向到阿里云 ---
 echo ""
-echo "=== 2. 配置节点 containerd 镜像 mirror ==="
-echo "  需要在每个 worker 节点上配置 /etc/containerd/certs.d/ghcr.io/llm-d/hosts.toml"
-echo ""
-
-# 生成 mirror 配置内容
-MIRROR_CONFIG=$(cat <<EOF
-server = "https://ghcr.io"
-
-[host."https://${ALIYUN_REGISTRY}"]
-  capabilities = ["pull", "resolve"]
-  [host."https://${ALIYUN_REGISTRY}".header]
-    authorization = ""
-EOF
-)
-
-echo "  建议在各 worker 节点执行以下命令："
-echo ""
-echo "  mkdir -p /etc/containerd/certs.d/ghcr.io/llm-d"
-echo "  cat > /etc/containerd/certs.d/ghcr.io/llm-d/hosts.toml << 'HOSTSEOF'"
-echo "$MIRROR_CONFIG"
-echo "  HOSTSEOF"
-echo "  systemctl reload containerd"
-echo ""
-
-# 检查是否有 kubectl exec 权限，可以直接远程配置
-NODES=$(kubectl get nodes --no-headers -o custom-columns='NAME:.metadata.name' 2>/dev/null | grep -v "$(hostname)" || true)
-if [[ -n "$NODES" ]]; then
-    echo "  检测到以下节点（本机不含）："
-    echo "$NODES" | sed 's/^/    /'
-    echo ""
-    echo "  如果节点有 SSH 访问权限，可用以下命令批量配置："
-    echo ""
-    for node_ip in $(kubectl get nodes -o jsonpath='{.items[*].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null); do
-        echo "  ssh root@${node_ip} 'mkdir -p /etc/containerd/certs.d/ghcr.io && ...'"
-    done
-fi
-
+echo "  验证:"
+$SSH "ctr -n k8s.io image ls 2>/dev/null | grep llm-d-benchmark || echo '[ERROR] 验证失败'"
 echo ""
 echo "=== 完成 ==="
-echo "  阿里云镜像: $ALIYUN_IMAGE"
-echo "  节点配置 containerd mirror 后，后续 harness pod 可从阿里云快速拉取。"

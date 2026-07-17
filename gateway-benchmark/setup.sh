@@ -19,7 +19,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PV_NAME="${PV_NAME:-llmdbench-workload-pv}"
 PV_SIZE="${PV_SIZE:-20Gi}"
 HOSTPATH="${HOSTPATH:-/mnt/llmdbench-workload-pvc}"
-SNAPSHOT="${SNAPSHOT:-/root/models/hub/models--Qwen--Qwen2.5-7B-Instruct/snapshots/a09a35458c702b33eeacc393d103063234e8bc28}"
+SNAPSHOT="/root/models/hub/models--Qwen--Qwen2.5-7B-Instruct"
 
 echo "========================================"
 echo "  Gateway Benchmark 环境初始化"

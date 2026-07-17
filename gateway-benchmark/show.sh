@@ -88,6 +88,14 @@ def read_json(location, fname):
     try: return json.loads(c) if c else {}
     except: return {}
 
+def list_files(location, pattern):
+    if location.startswith("ssh:"):
+        _, user_host, path = location.split(":", 2)
+        r = subprocess.run(["ssh", "-o", "StrictHostKeyChecking=no", user_host,
+                            f"ls {path}/{pattern} 2>/dev/null"], capture_output=True, text=True)
+        return [os.path.basename(f) for f in r.stdout.strip().splitlines() if f.strip()]
+    return [os.path.basename(f) for f in glob.glob(os.path.join(location, pattern))]
+
 def m(d, *keys, default=0):
     v = d
     for k in keys:

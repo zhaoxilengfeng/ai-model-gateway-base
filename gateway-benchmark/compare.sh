@@ -29,6 +29,10 @@ DIR_B="$2"
 LABEL_A="${3:-A}"
 LABEL_B="${4:-B}"
 
+# 支持相对路径：自动补全 SCRIPT_DIR 前缀
+[[ "$DIR_A" != /* ]] && DIR_A="${SCRIPT_DIR}/${DIR_A}"
+[[ "$DIR_B" != /* ]] && DIR_B="${SCRIPT_DIR}/${DIR_B}"
+
 # 在目录树中找 stage_*.json
 find_stage_dir() {
     local base="$1"
