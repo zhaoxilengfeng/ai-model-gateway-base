@@ -7,9 +7,9 @@ llmd:
   namespace: "llm-d-precise-prefix-gw"          # harness pod 所在 namespace
 
 aibrix:
-  endpoint_url: "http://PLACEHOLDER_AIBRIX_GATEWAY_IP:8080"
-  model: "PLACEHOLDER_MODEL_NAME"
-  namespace: "PLACEHOLDER_NAMESPACE"
+  endpoint_url: "http://10.98.46.137:8000"   # vLLM ClusterIP，绕过 EPP，随机轮询路由
+  model: "qwen25-7b-instruct"
+  namespace: "llm-d-precise-prefix-gw"
 
 defaults:
   harness: inference-perf        # inference-perf | guidellm | vllm-benchmark

@@ -354,3 +354,98 @@ spec:
     type: DirectoryOrCreate
 EOF
 ```
+
+
+---
+
+## 11. 路由策略对比：随机路由 vs 精准前缀哈希路由
+
+**目的**：验证 precise-prefix-cache-routing 相比随机路由（round-robin）的 KV cache 命中收益。
+
+### 11.1 原理
+
+| 对比项 | 精准前缀路由（llmd） | 随机路由（直连 vLLM） |
+|--------|-------------------|-------------------|
+| 端点 | EPP InferenceGateway（10.109.94.45:80） | vLLM ClusterIP（10.98.46.137:8000） |
+| 路由算法 | 精确前缀哈希 → 相同 system_prompt 路由到同一 vLLM pod | K8s Service 轮询，随机分发 |
+| KV cache 命中 | 高（同一 pod 复用缓存块） | 低（跨 pod 无共享缓存） |
+
+### 11.2 配置 config.yaml
+
+`aibrix` 端点指向 vLLM ClusterIP，绕过 EPP 实现随机轮询：
+
+```yaml
+# config.yaml
+aibrix:
+  endpoint_url: "http://10.98.46.137:8000"   # vLLM ClusterIP，直连，无前缀路由
+  model: "qwen25-7b-instruct"
+  namespace: "llm-d-precise-prefix-gw"
+```
+
+> vLLM ClusterIP 可通过以下命令查询：
+> ```bash
+> kubectl get svc qwen25-7b-instruct -n llm-d-precise-prefix-gw
+> ```
+
+### 11.3 运行对比测试
+
+**场景一：共享前缀（最能体现路由差异）**
+
+```bash
+cd /root/ai-model-gateway-base/gateway-benchmark
+
+# 精准前缀路由
+bash run_llmd.sh --workload sweep_shared_prefix.yaml
+
+# 随机路由（同一套 vLLM 集群，绕过 EPP）
+bash run_aibrix.sh --workload sweep_shared_prefix.yaml
+```
+
+**场景二：真实 Qwen Coder Trace（含 hash_ids，前缀共享度高）**
+
+```bash
+# 精准前缀路由
+bash run_llmd.sh --workload qwen_coder_trace.yaml
+
+# 随机路由
+bash run_aibrix.sh --workload qwen_coder_trace.yaml
+```
+
+**场景三：TPM 上限对比**
+
+```bash
+# 精准前缀路由（读 config.yaml llmd 端点）
+bash measure-tpm.sh --data-type shared_prefix --concurrency 200,300,400,500 --requests 400
+
+# 随机路由：临时将 config.yaml llmd.endpoint_url 改为 vLLM ClusterIP 再跑
+# 或将 aibrix.endpoint_url 填好后用 run_aibrix.sh 入口跑
+```
+
+### 11.4 对比结果
+
+```bash
+bash compare.sh \
+  results/llmd/inference-perf/<精准前缀时间戳> \
+  results/aibrix/inference-perf/<随机路由时间戳> \
+  "精准前缀路由" "随机路由"
+```
+
+生成报告：
+
+```bash
+bash report.sh results/llmd/inference-perf/<时间戳> \
+  --name "YYYY-MM-DD-routing-compare-precise" --title "精准前缀路由 vs 随机路由"
+bash report.sh results/aibrix/inference-perf/<时间戳> \
+  --name "YYYY-MM-DD-routing-compare-random"  --title "随机路由基准"
+```
+
+### 11.5 预期差异
+
+| 指标 | 精准前缀路由 | 随机路由 | 预期 |
+|------|------------|---------|------|
+| KV cache 命中率 | 高（50-80%） | 接近 0% | 精准路由显著更高 |
+| TTFT（共享前缀场景） | 低 | 高 | 精准路由更低 |
+| output TPM（SLO 内） | 高 | 低 | 精准路由可承载更高吞吐 |
+| TTFT（随机负载场景） | 与随机路由相近 | — | 两者差异小 |
+
+> **注意**：测试期间不要切换模型或重启 vLLM pod，避免 KV cache 被清空影响结果。
