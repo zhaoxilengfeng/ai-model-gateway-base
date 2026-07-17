@@ -1,20 +1,25 @@
 #!/usr/bin/env bash
 # measure-tpm-coder.sh — 用真实 Qwen Coder Trace 数据测量 TPM 上限
 #
+# 方法：
+#   trace_session_replay + 高并发 session + ignore_trace_delays: true
+#   harness 强制要求 weka_trace_replay 只能配合 trace_session_replay，
+#   所以通过拉高 concurrent_sessions 并忽略时间戳来模拟高压测试。
+#
 # 与 measure-tpm.sh 的区别：
-#   - data 使用 weka_trace_replay（真实代码补全流量），而非合成数据
-#   - ignore_trace_delays: true，忽略时间戳限速，让并发数真正控制 GPU 压力
+#   - data: weka_trace_replay（真实代码补全流量，input 均值 2379 token）
+#   - load: trace_session_replay（harness 限制）+ ignore_trace_delays: true
 #   - api.type: chat（coder trace 是多轮对话格式）
-#   - 默认 SLO 2000ms（编码场景 input 长，TTFT 天然更高）
+#   - 默认 SLO 3000ms（编码场景 input 更长）
 #
 # 数据集路径：/mnt/llmdbench-workload-pvc/datasets/qwen-coder/converted/
 # 如未准备好，参考 RUNBOOK 第 7 节下载并转换。
 #
 # 用法：
 #   bash measure-tpm-coder.sh                          # 默认参数
-#   bash measure-tpm-coder.sh --concurrency 32,64,128,200,300
-#   bash measure-tpm-coder.sh --slo 1500
-#   bash measure-tpm-coder.sh --trace-dir /path/to/converted
+#   bash measure-tpm-coder.sh --sessions 32,64,128,200 # 自定义并发 session 阶梯
+#   bash measure-tpm-coder.sh --num-sessions 300       # 每阶段运行的 session 总数
+#   bash measure-tpm-coder.sh --slo 2000
 #   bash measure-tpm-coder.sh --dry-run
 
 set -euo pipefail
@@ -22,21 +27,23 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CONFIG="${SCRIPT_DIR}/config.yaml"
 
 # --- 默认参数 ---
-CONCURRENCY_STEPS="${CONCURRENCY:-32,64,128,200,300}"
-REQUESTS_PER_STEP="${REQUESTS:-300}"
-TTFT_P99_SLO="${SLO:-2000}"
+# 并发 session 阶梯（等效于 measure-tpm.sh 的 --concurrency）
+SESSION_STEPS="${SESSIONS:-16,32,64,128,200}"
+# 每阶段运行的 session 总数（越多统计越稳定，但耗时更长）
+NUM_SESSIONS="${NUM_SESSIONS:-200}"
+TTFT_P99_SLO="${SLO:-3000}"
 TRACE_DIR="${TRACE_DIR:-/requests/datasets/qwen-coder/converted}"
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-32768}"
 DRY_RUN=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --concurrency)  CONCURRENCY_STEPS="$2"; shift 2 ;;
-    --requests)     REQUESTS_PER_STEP="$2"; shift 2 ;;
-    --slo)          TTFT_P99_SLO="$2"; shift 2 ;;
-    --trace-dir)    TRACE_DIR="$2"; shift 2 ;;
+    --sessions)      SESSION_STEPS="$2"; shift 2 ;;
+    --num-sessions)  NUM_SESSIONS="$2"; shift 2 ;;
+    --slo)           TTFT_P99_SLO="$2"; shift 2 ;;
+    --trace-dir)     TRACE_DIR="$2"; shift 2 ;;
     --max-model-len) MAX_MODEL_LEN="$2"; shift 2 ;;
-    --dry-run)      DRY_RUN=true; shift ;;
+    --dry-run)       DRY_RUN=true; shift ;;
     *) shift ;;
   esac
 done
@@ -56,16 +63,17 @@ ENDPOINT=$(yaml_get '.llmd.endpoint_url')
 MODEL=$(yaml_get '.llmd.model')
 NAMESPACE=$(yaml_get '.llmd.namespace')
 
-echo "=============================================="
+echo "=================================================================="
 echo "  TPM 上限测量 — Qwen Coder Trace（真实数据）"
-echo "  Endpoint:    $ENDPOINT"
-echo "  Model:       $MODEL"
-echo "  并发阶梯:    $CONCURRENCY_STEPS"
-echo "  每阶段请求:  $REQUESTS_PER_STEP"
-echo "  Trace 目录:  $TRACE_DIR"
-echo "  max_model_len: $MAX_MODEL_LEN"
-echo "  TTFT p99 SLO: ${TTFT_P99_SLO}ms"
-echo "=============================================="
+echo "  Endpoint:        $ENDPOINT"
+echo "  Model:           $MODEL"
+echo "  并发 session 阶梯: $SESSION_STEPS"
+echo "  每阶段 sessions:  $NUM_SESSIONS"
+echo "  Trace 目录:      $TRACE_DIR"
+echo "  max_model_len:   $MAX_MODEL_LEN"
+echo "  TTFT p99 SLO:    ${TTFT_P99_SLO}ms"
+echo "  ignore_trace_delays: true（忽略时间戳，最大化压力）"
+echo "=================================================================="
 
 source /root/llm-d-benchmark/.venv/bin/activate
 
@@ -75,17 +83,18 @@ mkdir -p "$WORKSPACE"
 PROFILE_FILE="${WORKSPACE}/tpm_coder_profile.yaml.in"
 
 STAGES=""
-IFS=',' read -ra STEPS <<< "$CONCURRENCY_STEPS"
-for c in "${STEPS[@]}"; do
+IFS=',' read -ra STEPS <<< "$SESSION_STEPS"
+for s in "${STEPS[@]}"; do
   STAGES="${STAGES}
-    - concurrency_level: ${c}
-      num_requests: ${REQUESTS_PER_STEP}"
+    - concurrent_sessions: ${s}
+      num_sessions: ${NUM_SESSIONS}"
 done
 
 cat > "$PROFILE_FILE" << EOF
 load:
-  type: concurrent
+  type: trace_session_replay
   stages:${STAGES}
+  worker_max_concurrency: 1000
 api:
   type: chat
   streaming: true
@@ -108,11 +117,15 @@ data:
     skip_invalid_files: true
     ignore_trace_delays: true
     trace_idle_gap_cap_seconds: 5.0
+    duplicate_sessions_target: 2000
 report:
   request_lifecycle:
     summary: true
     per_stage: true
     per_request: true
+  session_lifecycle:
+    summary: true
+    per_stage: true
 storage:
   local_storage:
     path: /workspace
@@ -148,11 +161,11 @@ llmdbenchmark \
 
 # --- 解析结果 ---
 SLO=$TTFT_P99_SLO
-python3 - "$WORKSPACE" "$SLO" "${CONCURRENCY_STEPS}" << 'PYEOF'
+python3 - "$WORKSPACE" "$SLO" "${SESSION_STEPS}" << 'PYEOF'
 import json, glob, sys
 
-workspace, slo_ms, conc_str = sys.argv[1], float(sys.argv[2]), sys.argv[3]
-fallback_steps = conc_str.split(',')
+workspace, slo_ms, sess_str = sys.argv[1], float(sys.argv[2]), sys.argv[3]
+fallback_steps = [s + "s" for s in sess_str.split(',')]
 
 result_dir = sorted(glob.glob(f'{workspace}/root-*/results/*_1'))
 if not result_dir:
@@ -161,33 +174,38 @@ if not result_dir:
 result_dir = result_dir[0]
 stages = sorted(glob.glob(f'{result_dir}/stage_*_lifecycle_metrics.json'))
 
-# 从 workload yaml 读取真实 concurrency_level
+# 从 workload yaml 读取 concurrent_sessions
 steps = []
 for wf in sorted(glob.glob(f'{result_dir}/*.yaml')):
     try:
         import yaml as _yaml
         with open(wf) as _f:
             wd = _yaml.safe_load(_f)
-        load_val = wd.get("load")
-        stgs = load_val if isinstance(load_val, list) else (load_val or {}).get("stages", []) if isinstance(load_val, dict) else []
-        if stgs and isinstance(stgs[0], dict):
-            if "concurrency_level" in stgs[0]:
-                steps = [str(s["concurrency_level"]) + "c" for s in stgs]
-                break
-            elif "rate" in stgs[0]:
-                steps = [str(s["rate"]) + " QPS" for s in stgs]
-                break
+        if not isinstance(wd, dict): continue
+        load_val = wd.get('load')
+        stgs = load_val if isinstance(load_val, list) else (load_val or {}).get('stages', []) if isinstance(load_val, dict) else []
+        if not stgs: continue
+        st0 = stgs[0] if isinstance(stgs[0], dict) else {}
+        if 'concurrent_sessions' in st0:
+            steps = [str(s.get('concurrent_sessions', '?')) + 's' for s in stgs if isinstance(s, dict)]
+            break
+        elif 'concurrency_level' in st0:
+            steps = [str(s.get('concurrency_level', '?')) + 'c' for s in stgs if isinstance(s, dict)]
+            break
+        elif 'rate' in st0:
+            steps = [str(s.get('rate', '?')) + ' QPS' for s in stgs if isinstance(s, dict)]
+            break
     except: pass
 if not steps:
     steps = fallback_steps
 
 print()
-print('='*90)
-print('  TPM 测量结果 — Qwen Coder Trace（真实编码场景）')
+print('='*92)
+print('  TPM 测量结果 — Qwen Coder Trace（真实编码场景，ignore_trace_delays=true）')
 print(f'  TTFT p99 SLO = {slo_ms:.0f}ms')
-print('='*90)
-print(f'  {"并发":>8} {"成功/失败":>10} {"output tok/s":>14} {"output TPM":>12} {"total TPM":>12} {"TTFT p50":>10} {"TTFT p99":>10} {"状态":>12}')
-print(f'  {"-"*88}')
+print('='*92)
+print(f'  {"并发sess":>8} {"成功/失败":>10} {"output tok/s":>14} {"output TPM":>12} {"total TPM":>12} {"TTFT p50":>10} {"TTFT p99":>10} {"状态":>12}')
+print(f'  {"-"*90}')
 
 results = []
 for i, sf in enumerate(stages):
@@ -196,7 +214,7 @@ for i, sf in enumerate(stages):
     tput = s.get('throughput', {}); lat = s.get('latency', {})
     ttft = lat.get('time_to_first_token', {})
 
-    conc = steps[i] if i < len(steps) else '?'
+    sess = steps[i] if i < len(steps) else '?'
     out_tps = tput.get('output_tokens_per_sec', 0)
     total_tps = tput.get('total_tokens_per_sec', 0)
     out_tpm = out_tps * 60
@@ -218,17 +236,17 @@ for i, sf in enumerate(stages):
     else:
         status = '正常'
 
-    results.append(dict(conc=conc, out_tpm=out_tpm, total_tpm=total_tpm,
+    results.append(dict(sess=sess, out_tpm=out_tpm, total_tpm=total_tpm,
                         ttft_p50=ttft_p50, ttft_p99=ttft_p99, status=status,
                         slo_ok=slo_ok, ok=ok, fail=fail))
-    print(f'  {conc:>8} {str(ok)+"/"+str(fail):>10} {out_tps:>14.0f} {out_tpm:>12.0f} {total_tpm:>12.0f} {ttft_p50:>10.0f} {ttft_p99:>10.0f} {status:>12}')
+    print(f'  {sess:>8} {str(ok)+"/"+str(fail):>10} {out_tps:>14.0f} {out_tpm:>12.0f} {total_tpm:>12.0f} {ttft_p50:>10.0f} {ttft_p99:>10.0f} {status:>12}')
 
 valid = [r for r in results if r['slo_ok'] and r['fail'] == 0]
 if valid:
     best = max(valid, key=lambda r: r['out_tpm'])
     print()
     print(f'  ┌─ 结论 (TTFT p99 ≤ {slo_ms:.0f}ms 约束下) ────────────────────')
-    print(f'  │  有效峰值 output TPM : {best["out_tpm"]:>10,.0f}  ({best["conc"]})')
+    print(f'  │  有效峰值 output TPM : {best["out_tpm"]:>10,.0f}  ({best["sess"]} 并发)')
     print(f'  │  有效峰值 total TPM  : {best["total_tpm"]:>10,.0f}  (input+output)')
     print(f'  │  对应 TTFT p50/p99   : {best["ttft_p50"]:.0f}ms / {best["ttft_p99"]:.0f}ms')
     print(f'  └──────────────────────────────────────────────────────────')
@@ -237,7 +255,7 @@ else:
     print(f'  所有并发数下 TTFT p99 均超过 SLO {slo_ms:.0f}ms，建议提高 --slo 或降低并发')
 
 abs_best = max(results, key=lambda r: r['out_tpm'])
-print(f'  绝对峰值 output TPM   : {abs_best["out_tpm"]:>10,.0f}  ({abs_best["conc"]}，不含 SLO 约束)')
+print(f'  绝对峰值 output TPM   : {abs_best["out_tpm"]:>10,.0f}  ({abs_best["sess"]} 并发，不含 SLO 约束)')
 PYEOF
 
 echo ""
