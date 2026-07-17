@@ -62,7 +62,7 @@ spec:
         - "--host=0.0.0.0"
         - "--port=8000"
         - "--dtype=half"
-        - "--max-model-len=8192"
+        - "--max-model-len=32768"
         - "--gpu-memory-utilization=0.85"
         - "--enable-prefix-caching"
         # ── 精准前缀哈希路由必须项 ──────────────────────────────────────────
