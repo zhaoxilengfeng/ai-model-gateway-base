@@ -14,4 +14,4 @@ spec:
     rateLimit:
       local:
         - tokens: 1000     # 每分钟最多 1000 个 token（input+output 合计）
-          unit: Minute
+          unit: Minutes
