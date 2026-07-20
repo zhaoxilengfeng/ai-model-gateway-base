@@ -35,6 +35,7 @@ TTFT_P99_SLO="${SLO:-3000}"
 TRACE_DIR="${TRACE_DIR:-/requests/datasets/qwen-coder/converted}"
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-32768}"
 DRY_RUN=false
+GATEWAY="${GATEWAY:-llmd}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -43,6 +44,7 @@ while [[ $# -gt 0 ]]; do
     --slo)           TTFT_P99_SLO="$2"; shift 2 ;;
     --trace-dir)     TRACE_DIR="$2"; shift 2 ;;
     --max-model-len) MAX_MODEL_LEN="$2"; shift 2 ;;
+    --gateway)       GATEWAY="$2"; shift 2 ;;
     --dry-run)       DRY_RUN=true; shift ;;
     *) shift ;;
   esac
@@ -59,12 +61,13 @@ print(v)
 "
 }
 
-ENDPOINT=$(yaml_get '.llmd.endpoint_url')
-MODEL=$(yaml_get '.llmd.model')
-NAMESPACE=$(yaml_get '.llmd.namespace')
+ENDPOINT=$(yaml_get ".${GATEWAY}.endpoint_url")
+MODEL=$(yaml_get ".${GATEWAY}.model")
+NAMESPACE=$(yaml_get ".${GATEWAY}.namespace")
 
 echo "=================================================================="
 echo "  TPM 上限测量 — Qwen Coder Trace（真实数据）"
+echo "  Gateway:         $GATEWAY"
 echo "  Endpoint:        $ENDPOINT"
 echo "  Model:           $MODEL"
 echo "  并发 session 阶梯: $SESSION_STEPS"
@@ -78,7 +81,7 @@ echo "=================================================================="
 source /root/llm-d-benchmark/.venv/bin/activate
 
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-WORKSPACE="${SCRIPT_DIR}/results/llmd/inference-perf/tpm_coder_${TIMESTAMP}"
+WORKSPACE="${SCRIPT_DIR}/results/${GATEWAY}/inference-perf/tpm_coder_${TIMESTAMP}"
 mkdir -p "$WORKSPACE"
 PROFILE_FILE="${WORKSPACE}/tpm_coder_profile.yaml.in"
 
