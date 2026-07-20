@@ -1,0 +1,18 @@
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: rate-limit-requests-policy
+  namespace: llm-d-precise-prefix-gw
+  labels:
+    app: agentgateway-test
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: precise-prefix-cache-routing
+  traffic:
+    rateLimit:
+      local:
+        - requests: 5      # 每分钟最多 5 个请求
+          unit: Minutes
+          burst: 2          # 允许瞬时超出 2 个（即最多 7 个/分钟的突发）

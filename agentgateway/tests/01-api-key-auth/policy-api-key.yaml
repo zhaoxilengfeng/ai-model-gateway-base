@@ -1,0 +1,18 @@
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: api-key-auth-policy
+  namespace: llm-d-precise-prefix-gw
+  labels:
+    app: agentgateway-test
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: precise-prefix-cache-routing
+  traffic:
+    apiKeyAuthentication:
+      mode: Strict
+      secretRef:
+        name: agentgateway-api-keys
+      # location 省略：默认从 Authorization: Bearer <key> 读取
