@@ -39,6 +39,7 @@ SP_NUM_GROUPS="${SP_NUM_GROUPS:-32}"
 SP_PROMPTS_PER_GROUP="${SP_PROMPTS_PER_GROUP:-32}"
 SP_SYSTEM_LEN="${SP_SYSTEM_LEN:-512}"
 DRY_RUN=false
+GATEWAY="${GATEWAY:-llmd}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -50,6 +51,7 @@ while [[ $# -gt 0 ]]; do
     --data-type)    DATA_TYPE="$2"; shift 2 ;;
     --sp-groups)    SP_NUM_GROUPS="$2"; shift 2 ;;
     --sp-system-len) SP_SYSTEM_LEN="$2"; shift 2 ;;
+    --gateway)      GATEWAY="$2"; shift 2 ;;
     --dry-run)      DRY_RUN=true; shift ;;
     *) shift ;;
   esac
@@ -66,9 +68,9 @@ print(v)
 "
 }
 
-ENDPOINT=$(yaml_get '.llmd.endpoint_url')
-MODEL=$(yaml_get '.llmd.model')
-NAMESPACE=$(yaml_get '.llmd.namespace')
+ENDPOINT=$(yaml_get ".${GATEWAY}.endpoint_url")
+MODEL=$(yaml_get ".${GATEWAY}.model")
+NAMESPACE=$(yaml_get ".${GATEWAY}.namespace")
 
 echo "=============================================="
 echo "  TPM 上限测量 v2"
@@ -80,13 +82,14 @@ echo "  Input mean:  $INPUT_MEAN tokens"
 echo "  Output mean: $OUTPUT_MEAN tokens"
 echo "  Data type:   $DATA_TYPE"
 [[ "$DATA_TYPE" == "shared_prefix" ]] && echo "  SP config:   ${SP_NUM_GROUPS}g x ${SP_PROMPTS_PER_GROUP}p, system=${SP_SYSTEM_LEN}tok, question=${INPUT_MEAN}tok, output=${OUTPUT_MEAN}tok"
+echo "  Gateway:      $GATEWAY"
 echo "  TTFT p99 SLO: ${TTFT_P99_SLO}ms"
 echo "=============================================="
 
 source /root/llm-d-benchmark/.venv/bin/activate
 
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-WORKSPACE="${SCRIPT_DIR}/results/llmd/inference-perf/tpm_${TIMESTAMP}"
+WORKSPACE="${SCRIPT_DIR}/results/${GATEWAY}/inference-perf/tpm_${TIMESTAMP}"
 mkdir -p "$WORKSPACE"
 PROFILE_FILE="${WORKSPACE}/tpm_profile.yaml.in"
 
