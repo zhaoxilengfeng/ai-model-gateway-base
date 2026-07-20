@@ -1,7 +1,7 @@
 apiVersion: agentgateway.dev/v1alpha1
 kind: AgentgatewayPolicy
 metadata:
-  name: rate-limit-tokens-policy
+  name: basic-auth-policy
   namespace: llm-d-precise-prefix-gw
   labels:
     app: agentgateway-test
@@ -11,7 +11,8 @@ spec:
       kind: HTTPRoute
       name: precise-prefix-cache-routing
   traffic:
-    rateLimit:
-      local:
-        - tokens: 1000     # 每分钟最多 1000 个 token（input+output 合计）
-          unit: Minute
+    basicAuthentication:
+      mode: Strict
+      realm: "llm-d API"
+      secretRef:
+        name: basic-auth-users

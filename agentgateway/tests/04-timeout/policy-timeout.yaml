@@ -1,7 +1,7 @@
 apiVersion: agentgateway.dev/v1alpha1
 kind: AgentgatewayPolicy
 metadata:
-  name: rate-limit-tokens-policy
+  name: timeout-policy
   namespace: llm-d-precise-prefix-gw
   labels:
     app: agentgateway-test
@@ -11,7 +11,5 @@ spec:
       kind: HTTPRoute
       name: precise-prefix-cache-routing
   traffic:
-    rateLimit:
-      local:
-        - tokens: 1000     # 每分钟最多 1000 个 token（input+output 合计）
-          unit: Minute
+    timeouts:
+      request: 3s    # 整个请求（含 LLM 生成）最多 3 秒

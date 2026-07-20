@@ -1,0 +1,28 @@
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: cors-policy
+  namespace: llm-d-precise-prefix-gw
+  labels:
+    app: agentgateway-test
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: precise-prefix-cache-routing
+  traffic:
+    cors:
+      allowOrigins:
+        - "https://example.com"
+        - "https://app.example.com"
+      allowMethods:
+        - GET
+        - POST
+        - OPTIONS
+      allowHeaders:
+        - Content-Type
+        - Authorization
+      exposeHeaders:
+        - X-Request-Id
+      maxAge: 86400           # preflight 缓存 24h
+      allowCredentials: false

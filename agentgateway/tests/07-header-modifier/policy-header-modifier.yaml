@@ -1,0 +1,24 @@
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: header-modifier-policy
+  namespace: llm-d-precise-prefix-gw
+  labels:
+    app: agentgateway-test
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: precise-prefix-cache-routing
+  traffic:
+    headerModifiers:
+      request:
+        add:
+          - name: "X-Gateway-Source"
+            value: "agentgateway-v1.3.1"
+      response:
+        add:
+          - name: "X-Powered-By"
+            value: "llm-d agentgateway"
+          - name: "X-Gateway-Version"
+            value: "v1.3.1"
