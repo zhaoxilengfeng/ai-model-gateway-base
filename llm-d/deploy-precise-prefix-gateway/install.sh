@@ -1,40 +1,22 @@
 #!/bin/bash
-# install.sh — 安装 precise-prefix-cache-routing gateway 模式（agentgateway）
+# install.sh — 安装全局基础设施（一次性）
 #
-# 路由模式：Gateway（agentgateway 作为数据面 proxy）
-# 核心机制：vLLM 通过 ZMQ :5556 发布 KV 块事件 → EPP 订阅并构建哈希索引
-#           → 请求经 agentgateway → HTTPRoute → InferencePool → EPP 选路 → vLLM pod
+# 职责：GIE CRDs + agentgateway CRDs + agentgateway controller + namespace + HF token
+# 之后通过 install-pool.sh 为每个模型创建推理池
 set -e
 
-GUIDE_NAME="${GUIDE_NAME:-precise-prefix-cache-routing}"
 NAMESPACE="${NAMESPACE:-llm-d-precise-prefix-gw}"
 GAIE_VERSION="${GAIE_VERSION:-v1.5.0}"
 AGENTGATEWAY_VERSION="${AGENTGATEWAY_VERSION:-v1.3.1}"
-REPO_ROOT="${REPO_ROOT:-/root/llm-d}"
 DEPLOY_DIR="${DEPLOY_DIR:-/root/deploy/llm-d-precise-prefix-gateway}"
-MODEL_CACHE="${MODEL_CACHE:-/root/models}"
-RENDER_MODEL_PATH="${RENDER_MODEL_PATH:-}"
-SERVED_MODEL="${SERVED_MODEL:-qwen25-7b-instruct}"
 
-ROUTER_CHART_DIR="$DEPLOY_DIR/llm-d-router-gateway"
 AGW_CHART_DIR="$DEPLOY_DIR/agentgateway/agentgateway"
 GIE_YAML="$DEPLOY_DIR/gie-${GAIE_VERSION}.yaml"
 AGW_CRD_DIR="$DEPLOY_DIR/agentgateway-crds"
 
-for f in "$ROUTER_CHART_DIR/Chart.yaml" "$AGW_CHART_DIR/Chart.yaml" "$GIE_YAML"; do
+for f in "$AGW_CHART_DIR/Chart.yaml" "$GIE_YAML"; do
   [ -f "$f" ] || { echo "ERROR: $f 不存在，请先运行 prepare.sh" >&2; exit 1; }
 done
-
-# 自动解析 render 模型路径
-if [ -z "$RENDER_MODEL_PATH" ]; then
-  MODEL_PATH_RAW="${MODEL_PATH_RAW:-/root/models/hub/models--Qwen--Qwen2.5-7B-Instruct}"
-  if [ -d "${MODEL_PATH_RAW}/snapshots" ]; then
-    RENDER_MODEL_PATH=$(ls -td "${MODEL_PATH_RAW}/snapshots"/*/ 2>/dev/null | head -1 | sed 's|/$||')
-  else
-    RENDER_MODEL_PATH="$MODEL_PATH_RAW"
-  fi
-  echo "  render model path: $RENDER_MODEL_PATH"
-fi
 
 echo "=== 1. Install GIE CRDs ==="
 kubectl apply --server-side -f "$GIE_YAML"
@@ -43,10 +25,10 @@ echo "=== 2. Install Agentgateway CRDs ==="
 if [ -d "$AGW_CRD_DIR" ] && ls "$AGW_CRD_DIR"/*.yaml &>/dev/null; then
   kubectl apply --server-side -f "$AGW_CRD_DIR/"
 else
-  echo "  WARNING: $AGW_CRD_DIR 不存在，跳过（agentgateway controller 可能无法启动）"
+  echo "  WARNING: $AGW_CRD_DIR 不存在，跳过"
 fi
 
-echo "=== 3. Install Agentgateway ==="
+echo "=== 3. Install Agentgateway Controller ==="
 helm upgrade --install agentgateway "$AGW_CHART_DIR" \
   --namespace agentgateway-system --create-namespace \
   --set inferenceExtension.enabled=true \
@@ -64,158 +46,9 @@ kubectl create secret generic llm-d-hf-token \
   --namespace "${NAMESPACE}" \
   --dry-run=client -o yaml | kubectl apply -f -
 
-echo "=== 6. Deploy render (tokenizer) Service ==="
-kubectl apply -n "${NAMESPACE}" -f - <<EOF
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: ${GUIDE_NAME}-render
-  namespace: ${NAMESPACE}
-  labels:
-    app.kubernetes.io/component: vllm-render
-    app.kubernetes.io/part-of: ${GUIDE_NAME}
-spec:
-  replicas: 3
-  selector:
-    matchLabels:
-      app.kubernetes.io/component: vllm-render
-      app.kubernetes.io/part-of: ${GUIDE_NAME}
-  template:
-    metadata:
-      labels:
-        app.kubernetes.io/component: vllm-render
-        app.kubernetes.io/part-of: ${GUIDE_NAME}
-    spec:
-      automountServiceAccountToken: false
-      containers:
-      - name: vllm-render
-        image: docker.io/vllm/vllm-openai-cpu:v0.23.0
-        imagePullPolicy: IfNotPresent
-        command: ["vllm", "launch", "render"]
-        args:
-        - "${RENDER_MODEL_PATH}"
-        - "--port=8000"
-        - "--served-model-name=${SERVED_MODEL}"
-        ports:
-        - name: render-http
-          containerPort: 8000
-        env:
-        - name: HF_HUB_OFFLINE
-          value: "1"
-        - name: DO_NOT_TRACK
-          value: "1"
-        resources:
-          requests:
-            cpu: "1"
-            memory: 4Gi
-          limits:
-            cpu: "4"
-            memory: 12Gi
-        readinessProbe:
-          httpGet:
-            path: /health
-            port: render-http
-          initialDelaySeconds: 30
-          periodSeconds: 10
-          failureThreshold: 30
-        volumeMounts:
-        - name: model-cache
-          mountPath: /root/models
-      volumes:
-      - name: model-cache
-        hostPath:
-          path: ${MODEL_CACHE}
-          type: DirectoryOrCreate
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: ${GUIDE_NAME}-render
-  namespace: ${NAMESPACE}
-spec:
-  selector:
-    app.kubernetes.io/component: vllm-render
-    app.kubernetes.io/part-of: ${GUIDE_NAME}
-  ports:
-  - name: render-http
-    port: 8000
-    targetPort: render-http
-    protocol: TCP
-EOF
-
-echo "=== 7. Deploy Gateway resource ==="
-kubectl apply -k "${REPO_ROOT}/guides/recipes/gateway/agentgateway" -n "${NAMESPACE}"
-echo "  等待 Gateway programmed..."
-kubectl wait gateway/llm-d-inference-gateway -n "${NAMESPACE}" \
-  --for=jsonpath='{.status.conditions[?(@.type=="Programmed")].status}=True' \
-  --timeout=60s 2>/dev/null || kubectl get gateway llm-d-inference-gateway -n "${NAMESPACE}"
-
-echo "=== 8. Install llm-d-router-gateway (EPP + HTTPRoute + InferencePool) ==="
-helm upgrade --install "${GUIDE_NAME}" "$ROUTER_CHART_DIR" \
-  -f "${REPO_ROOT}/guides/recipes/router/base.values.yaml" \
-  -f "${REPO_ROOT}/guides/recipes/router/features/httproute-flags.yaml" \
-  -f "${REPO_ROOT}/guides/${GUIDE_NAME}/router/${GUIDE_NAME}.values.yaml" \
-  -n "${NAMESPACE}" \
-  --set provider.name=agentgateway \
-  --set httpRoute.inferenceGatewayName=llm-d-inference-gateway \
-  --set "router.epp.pluginsCustomConfig.precise-prefix-cache-routing-plugins\\.yaml=apiVersion: llm-d.ai/v1alpha1
-kind: EndpointPickerConfig
-plugins:
-  - type: token-producer
-    parameters:
-      modelName: ${SERVED_MODEL}
-      vllm:
-        url: \"http://${GUIDE_NAME}-render:8000\"
-  - type: endpoint-notification-source
-  - type: precise-prefix-cache-producer
-    parameters:
-      tokenProcessorConfig:
-        blockSize: 64
-      speculativeIndexing: true
-      indexerConfig:
-        kvBlockIndexConfig:
-          enableMetrics: true
-      kvEventsConfig:
-        topicFilter: \"kv@\"
-        concurrency: 8
-        discoverPods: true
-        podDiscoveryConfig:
-          socketPort: 5556
-  - type: prefix-cache-scorer
-    parameters:
-      prefixMatchInfoProducerName: precise-prefix-cache-producer
-  - type: kv-cache-utilization-scorer
-  - type: queue-scorer
-  - type: no-hit-lru-scorer
-    parameters:
-      prefixMatchInfoProducerName: precise-prefix-cache-producer
-dataLayer:
-  sources:
-    - pluginRef: endpoint-notification-source
-      extractors:
-        - pluginRef: precise-prefix-cache-producer
-schedulingProfiles:
-  - name: default
-    plugins:
-      - pluginRef: kv-cache-utilization-scorer
-        weight: 2.0
-      - pluginRef: queue-scorer
-        weight: 2.0
-      - pluginRef: prefix-cache-scorer
-        weight: 3.0
-      - pluginRef: no-hit-lru-scorer
-        weight: 2.0" \
-  --wait --timeout=180s
-
 echo ""
-echo "=== Verify ==="
+echo "=== 全局基础设施安装完成 ==="
+echo "下一步：为每个模型运行 install-pool.sh，例如："
+echo "  bash install-pool.sh --pool qwen25-7b"
+echo "  bash install-pool.sh --pool glm4-9b"
 kubectl get pods -n agentgateway-system
-kubectl get pods -n "${NAMESPACE}"
-kubectl get gateway,httproute,inferencepool -n "${NAMESPACE}"
-
-NODE_PORT=$(kubectl get svc llm-d-inference-gateway -n "${NAMESPACE}" \
-  -o jsonpath='{.spec.ports[?(@.port==80)].nodePort}' 2>/dev/null || echo "<pending>")
-NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
-echo ""
-echo "Done. 下一步运行 deploy-model.sh 部署模型。"
-echo "访问地址（NodePort）: http://${NODE_IP}:${NODE_PORT}"
