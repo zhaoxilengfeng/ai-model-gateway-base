@@ -70,7 +70,12 @@ spec:
         - "--chat-template=${MODEL_PATH}/chat_template.jinja"
         - "--enable-metrics"
         - "--log-level=info"
+        - "--kv-events-config={"enable_kv_cache_events":true,"publisher":"zmq","endpoint":"tcp://*:5556","topic":"kv@$(POD_IP):8000@${SERVED_MODEL}"}"
         env:
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
         - name: HF_HUB_OFFLINE
           value: "1"
         - name: TRANSFORMERS_OFFLINE
@@ -80,6 +85,9 @@ spec:
         ports:
         - name: http
           containerPort: 8000
+        - name: kv-events
+          containerPort: 5556
+          protocol: TCP
         resources:
           limits:
             nvidia.com/gpu: "${TP_SIZE}"
