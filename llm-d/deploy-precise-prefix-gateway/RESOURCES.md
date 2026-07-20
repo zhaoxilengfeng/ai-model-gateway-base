@@ -337,3 +337,108 @@ bash verify-precise-prefix.sh
 bash /root/ai-model-gateway-base/llm-d/deploy-precise-prefix/test-routing-comparison.sh \
   -n llm-d-precise-prefix-gw
 ```
+
+---
+
+## 推理池设计指南：一个池 vs 多个池
+
+### 什么时候用一个推理池
+
+满足以下**全部**条件，多个模型部署可以共享同一个 InferencePool：
+
+| 条件 | 原因 |
+|------|------|
+| **served-model-name 相同** | EPP token-producer 只配一个 modelName，池内所有 pod 必须服务同一模型名 |
+| **tokenizer 完全相同** | render service 用 tokenizer 计算 prefix hash，不同 tokenizer 哈希结果不同，路由会混乱 |
+| **block-size 相同** | EPP prefix 索引依赖 block-size 对齐，不同值导致哈希不匹配 |
+| **KV events 格式兼容** | EPP 只能配一种 engineType（vllm/sglang），混用两种框架时另一种 KV events 无法正确解析 |
+
+**典型可共池场景**：同一模型的 vLLM 版和 sglang 版（served-model-name 相同、tokenizer 相同、block-size 相同）。
+
+---
+
+### 什么时候用多个推理池
+
+满足以下**任一**条件，必须创建独立的推理池：
+
+| 场景 | 原因 |
+|------|------|
+| **不同模型**（如 qwen vs GLM-4-9B）| served-model-name 不同，tokenizer 不同，HTTPRoute 需要按模型名路由 |
+| **不同 tokenizer** | prefix hash 计算错乱，路由会打到错误 pod |
+| **独立 SLA 需求** | 对不同模型需分别限流、独立监控、单独扩缩容 |
+| **框架 KV events 格式不兼容** | vLLM 和 sglang 混跑，EPP 无法同时正确解析两种格式 |
+
+---
+
+### 新增一个推理池需要部署哪些组件
+
+与现有池 `precise-prefix-cache-routing` 完全独立，每个新池需要完整的一套组件：
+
+| 组件 | 说明 | 是否可复用现有 |
+|------|------|--------------|
+| **模型 Deployment + Service** | 实际推理 pod，需配置 `--kv-events-config` ZMQ 和新的 label | ❌ 独立部署 |
+| **InferencePool** | 通过新 label selector 圈定本池的 pod | ❌ 每个池独立 |
+| **EPP Deployment + Service** | 独立的路由决策服务，token-producer 配置新模型的 modelName | ❌ 每个池独立 |
+| **EPP ConfigMap** | 插件配置，token-producer 指向新 render 服务 URL | ❌ 每个池独立 |
+| **render Service** | CPU-only tokenize 服务，加载新模型的 tokenizer | ❌ 每个池独立（tokenizer 不同） |
+| **HTTPRoute 新规则** | 按模型名或 path 路由到新 InferencePool | ❌ 在现有 HTTPRoute 追加，或新建 HTTPRoute |
+| **Gateway** | 数据面入口 | ✅ **可复用**现有 `llm-d-inference-gateway` |
+| **agentgateway controller** | 控制面 | ✅ **可复用**（集群全局共享） |
+| **GatewayClass** | agentgateway 注册 | ✅ **可复用**（集群全局共享） |
+
+**关键三处保持一致**（同一个池内）：
+
+```
+render service --served-model-name
+      ↕ 必须完全一致
+EPP token-producer.modelName
+      ↕ 必须完全一致
+vLLM --served-model-name
+```
+
+#### 以 GLM-4-9B 为例，新增第二个池需要的操作
+
+```bash
+# 1. 部署 GLM-4-9B 模型（Deployment + Service，label 用新 guide 名）
+bash deploy-glm4-9b.sh   # 使用新 label: llm-d.ai/guide: glm-4-9b-pool
+
+# 2. 部署 render service（加载 GLM-4-9B tokenizer）
+kubectl apply -f render-glm4.yaml
+
+# 3. 部署 EPP（独立副本，ConfigMap 中 modelName: glm-4-9b，render URL 指向新 render）
+kubectl apply -f epp-glm4.yaml
+
+# 4. 创建 InferencePool（selector: llm-d.ai/guide: glm-4-9b-pool）
+kubectl apply -f inferencepool-glm4.yaml
+
+# 5. 在 HTTPRoute 追加路由规则（按 header/path 区分，或通过不同端口/路径）
+kubectl apply -f httproute-with-glm4.yaml
+```
+
+#### 路由分流方案
+
+同一个 Gateway 下两个模型的分流，推荐按请求体里的 `model` 字段路由：
+
+```yaml
+# HTTPRoute 示例（agentgateway 支持按 header 路由）
+rules:
+  - matches:
+      - headers:
+          - name: x-model-name
+            value: qwen25-7b-instruct
+    backendRefs:
+      - kind: InferencePool
+        name: precise-prefix-cache-routing
+  - matches:
+      - headers:
+          - name: x-model-name
+            value: glm-4-9b
+    backendRefs:
+      - kind: InferencePool
+        name: glm-4-9b-pool
+```
+
+> **注意**：agentgateway 当前版本（v1.3.1）不原生解析 OpenAI `model` 字段做路由，
+> 需要客户端在 header 里额外携带 `x-model-name`，或通过不同路径（`/v1/qwen/` vs `/v1/glm/`）区分。
+> 后续版本可能支持按 request body 中的 `model` 字段直接路由。
+
