@@ -14,8 +14,16 @@
 | 来源 | [GIE v0.3.0](https://github.com/kubernetes-sigs/gateway-api-inference-extension/releases/tag/v0.3.0) |
 
 > **注意：** llm-d 当前依赖的是旧版 group `inference.networking.x-k8s.io/v1alpha2`，
-> 而 GIE 新版已迁移到 `inference.networking.k8s.io/v1`。
-> llm-d-router 架构文档明确说明 InferenceModel 正在上游大改，变更 finalized 后会同步。
+> 而 GIE 新版已迁移到 `inference.networking.k8s.io/v1`（见当前集群安装的
+> [gie-v1.5.0.yaml](https://github.com/kubernetes-sigs/gateway-api-inference-extension/releases/tag/v1.5.0)）。
+>
+> 旧版 group 的使用体现在两处源码：
+> - `llm-d-model-service` [go.mod](https://github.com/llm-d/llm-d-model-service/blob/main/go.mod) 依赖 GIE `v0.3.0`，
+>   [child_resources.go L417](https://github.com/llm-d/llm-d-model-service/blob/main/internal/controller/child_resources.go#L417)
+>   硬编码 `im.APIVersion = "inference.networking.x-k8s.io/v1alpha2"`
+> - `llm-d-router` [docs/architecture.md L300](https://github.com/llm-d/llm-d-router/blob/main/docs/architecture.md#L300)
+>   明确注明：*"The `InferenceModel` CRD is in the process of being significantly changed in IGW.
+>   Once finalized, these changes would be reflected in llm-d as well."*
 
 ---
 
@@ -243,7 +251,7 @@ spec:
 1. **modelName 不可变**：创建后无法修改，需要删除重建
 2. **同 namespace 唯一**：同一 InferencePool 内 modelName 不能重复，否则新建的 InferenceModel 状态为 `Ready=false`
 3. **CRD 需单独安装**：当前集群 `precise-prefix-gateway` 方案未安装，使用前需执行 `install-inferencemodel-crd.sh`
-4. **EPP 支持程度**：当前 `precise-prefix-cache-routing` EPP 实现中，`criticality` 调度逻辑取决于 llm-d-router 版本，建议查阅 [llm-d-router 架构文档](https://github.com/llm-d/llm-d-router/blob/main/docs/architecture.md)确认支持状态
+4. **EPP 支持程度**：当前 `precise-prefix-cache-routing` EPP 实现中，`criticality` 调度逻辑取决于 llm-d-router 版本。[llm-d-router 架构文档 L300](https://github.com/llm-d/llm-d-router/blob/main/docs/architecture.md#L300) 明确说明 `InferenceModel` 正在上游大改，建议关注后续版本同步情况
 
 ---
 
