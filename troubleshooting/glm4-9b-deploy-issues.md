@@ -100,3 +100,31 @@ kubectl patch deployment glm-4-9b -n llm-d-precise-prefix-gw --type=json \
 GLM-4-9B 存放路径（GPU 节点 h200-12-3）：
 - 实际路径：`/home/data/model/glm-4-9b-chat`（数据盘 `/home/data`，7TB）
 - master 下载临时路径：`/root/models/hub/glm-4-9b-chat`（后续可清理）
+
+
+---
+
+## 问题 3：InferencePool selector label 冲突
+
+两个池都用了相同的 guide label，EPP 选中所有 pod，路由混乱。
+
+修复：各池使用独立 guide label：
+- qwen: llm-d.ai/guide=precise-prefix-cache-routing
+- glm:  llm-d.ai/guide=glm4-9b-pool
+
+注意：Deployment selector 是 immutable，必须删除重建。
+
+---
+
+## 问题 4：单入口多模型路由
+
+agentgateway 原生支持按请求体 model 字段路由（无需客户端改动）：
+
+1. AgentgatewayPolicy (PreRouting): CEL 读取 request.body.model 写入 header
+2. HTTPRoute: 按 header 路由到对应 InferencePool
+
+配置文件：
+- llm-d/deploy-precise-prefix-gateway/policy-model-routing.yaml
+- llm-d/deploy-precise-prefix-gateway/httproute-model-routing.yaml
+
+结果：http://116.198.67.18:31273 单入口，model=qwen/glm 自动路由。
