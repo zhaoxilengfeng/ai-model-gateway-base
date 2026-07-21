@@ -4,7 +4,7 @@
 # 模型路径: /home/data/model/GLM-5.2-FP8（704G，141 个 safetensors 分片）
 # 镜像:     m.daocloud.io/docker.io/lmsysorg/sglang:latest（v0.5.15.post1）
 # GPU:      8× NVIDIA H200（143G），tensor_parallel_size=8
-set -e
+set -euo pipefail
 
 NAMESPACE="${NAMESPACE:-llm-d-precise-prefix-gw}"
 MODEL_NAME="${MODEL_NAME:-glm-5-2-fp8}"
@@ -70,7 +70,7 @@ spec:
         - "--chat-template=${MODEL_PATH}/chat_template.jinja"
         - "--enable-metrics"
         - "--log-level=info"
-        - "--kv-events-config={"enable_kv_cache_events":true,"publisher":"zmq","endpoint":"tcp://*:5556","topic":"kv@$(POD_IP):8000@${SERVED_MODEL}"}"
+        - "--kv-events-config={\"enable_kv_cache_events\":true,\"publisher\":\"zmq\",\"endpoint\":\"tcp://*:5556\",\"topic\":\"kv@\$(POD_IP):8000@${SERVED_MODEL}\"}"
         env:
         - name: POD_IP
           valueFrom:
@@ -150,8 +150,8 @@ spec:
 EOF
 
 echo ""
-echo "=== 等待 pod 调度 ==="
-kubectl rollout status deployment/${MODEL_NAME} -n ${NAMESPACE} --timeout=30s 2>/dev/null || true
+echo "=== 等待 pod 调度（GLM-5.2-FP8 加载需 5-10 分钟）==="
+kubectl rollout status deployment/${MODEL_NAME} -n ${NAMESPACE} --timeout=900s
 
 POD=$(kubectl get pod -n ${NAMESPACE} -l app=${MODEL_NAME} --no-headers | head -1 | awk '{print $1}')
 echo ""

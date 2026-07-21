@@ -7,7 +7,7 @@
 #   bash undeploy-model.sh glm-5-2-fp8
 #
 # 默认 Namespace: llm-d-precise-prefix-gw
-set -e
+set -euo pipefail
 
 MODEL_NAME="${1:-}"
 NAMESPACE="${NAMESPACE:-llm-d-precise-prefix-gw}"
@@ -43,9 +43,14 @@ else
 fi
 
 # 等待 pod 清理完成
+# GLM sglang 用 app= 标签，vLLM/qwen-sglang 用 llm-d.ai/model= 标签，两个都等
 echo "  等待 pod 退出..."
 kubectl wait --for=delete pod \
   -l "llm-d.ai/model=${MODEL_NAME}" \
+  -n "${NAMESPACE}" \
+  --timeout=60s 2>/dev/null || true
+kubectl wait --for=delete pod \
+  -l "app=${MODEL_NAME}" \
   -n "${NAMESPACE}" \
   --timeout=60s 2>/dev/null || true
 
@@ -55,4 +60,8 @@ kubectl get pods -n "${NAMESPACE}" --no-headers 2>/dev/null | awk '{print "  " $
 echo ""
 echo "=== GPU 释放情况 ==="
 NODE_IP=$(kubectl get node h200-12-3 -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null || echo "11.194.12.3")
-ssh root@${NODE_IP} 'nvidia-smi --query-gpu=index,memory.used --format=csv,noheader' 2>/dev/null || true
+if ssh -o ConnectTimeout=5 root@${NODE_IP} 'nvidia-smi --query-gpu=index,memory.used --format=csv,noheader' 2>/dev/null; then
+  :
+else
+  echo "  (无法连接到 ${NODE_IP}，请手动确认 GPU 释放)"
+fi

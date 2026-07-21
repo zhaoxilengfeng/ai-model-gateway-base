@@ -3,7 +3,7 @@
 #
 # 职责：GIE CRDs + agentgateway CRDs + agentgateway controller + namespace + HF token
 # 之后通过 install-pool.sh 为每个模型创建推理池
-set -e
+set -euo pipefail
 
 NAMESPACE="${NAMESPACE:-llm-d-precise-prefix-gw}"
 GAIE_VERSION="${GAIE_VERSION:-v1.5.0}"

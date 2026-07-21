@@ -1,5 +1,6 @@
 #!/bin/bash
 # uninstall.sh — 清理所有推理池 + 全局基础设施
+set -eo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NAMESPACE="${NAMESPACE:-llm-d-precise-prefix-gw}"

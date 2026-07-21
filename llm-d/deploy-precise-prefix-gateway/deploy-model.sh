@@ -1,6 +1,6 @@
 #!/bin/bash
 # deploy-model.sh — 部署 vLLM 模型到 precise-prefix-cache-routing gateway 集群
-set -e
+set -euo pipefail
 
 NAMESPACE="${NAMESPACE:-llm-d-precise-prefix-gw}"
 GUIDE_NAME="${GUIDE_NAME:-precise-prefix-cache-routing}"

@@ -6,7 +6,7 @@
 #   bash sync-images-to-node.sh [TARGET_NODE]
 #
 # 默认目标节点: 11.194.12.3，可通过参数或环境变量 TARGET_NODE 覆盖
-set -e
+set -euo pipefail
 
 TARGET_NODE="${1:-${TARGET_NODE:-11.194.12.3}}"
 TMP_DIR="${TMP_DIR:-/tmp}"
@@ -24,6 +24,12 @@ SSH_OPTS="-o StrictHostKeyChecking=no"
 
 echo "=== sync-images-to-node: 目标节点 ${TARGET_NODE} ==="
 
+# 预检查本机 /tmp 可用空间（至少 20G，GPU 镜像可达 10G+）
+AVAIL_KB=$(df -k "${TMP_DIR}" | awk 'NR==2{print $4}')
+if [[ "${AVAIL_KB}" -lt 20971520 ]]; then
+  echo "WARNING: ${TMP_DIR} 可用空间不足 20G（当前 $(( AVAIL_KB / 1024 / 1024 ))G），大镜像导出可能失败" >&2
+fi
+
 for item in "${IMAGES[@]}"; do
   TAR_NAME="${item%%|*}"
   IMAGE="${item#*|}"
@@ -39,7 +45,8 @@ for item in "${IMAGES[@]}"; do
     continue
   fi
 
-  # 1. 导出
+  # 1. 导出（先清除可能损坏的残留文件）
+  rm -f "${TAR_PATH}"
   echo "  [1/3] 导出 -> ${TAR_PATH} ..."
   ctr -n k8s.io image export "${TAR_PATH}" "${IMAGE}"
   echo "  导出完成: $(du -sh "${TAR_PATH}" | cut -f1)"

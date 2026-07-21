@@ -14,7 +14,7 @@
 #     --model-cache /root/models \
 #     --namespace llm-d-my-ns
 
-set -e
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 

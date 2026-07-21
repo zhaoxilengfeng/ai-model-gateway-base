@@ -8,18 +8,26 @@
 #   bash deploy-qwen-sglang.sh
 #   REPLICAS=4 bash deploy-qwen-sglang.sh  # 自定义副本数
 
-set -e
+set -euo pipefail
 
 NAMESPACE="${NAMESPACE:-llm-d-precise-prefix-gw}"
 GUIDE_NAME="${GUIDE_NAME:-precise-prefix-cache-routing}"
 # sglang 镜像：v0.4.7+ 支持 --kv-events-config
 SGLANG_IMAGE="${SGLANG_IMAGE:-m.daocloud.io/docker.io/lmsysorg/sglang:latest}"
 REPLICAS="${REPLICAS:-8}"
-MODEL_PATH="${MODEL_PATH:-/root/models/hub/models--Qwen--Qwen2.5-7B-Instruct}"
 MODEL_CACHE="${MODEL_CACHE:-/root/models}"
 
 MODEL_NAME="qwen25-7b-instruct-sglang"
 SERVED_MODEL="qwen25-7b-instruct"   # served-model-name 与 vLLM 一致，EPP 统一识别
+
+# 自动解析 snapshot 子目录（与 deploy-model.sh 保持一致）
+MODEL_PATH_RAW="${MODEL_PATH:-/root/models/hub/models--Qwen--Qwen2.5-7B-Instruct}"
+if [ -d "${MODEL_PATH_RAW}/snapshots" ]; then
+  MODEL_PATH=$(ls -td "${MODEL_PATH_RAW}/snapshots"/*/ 2>/dev/null | head -1 | sed 's|/$||')
+  echo "  Auto-resolved snapshot: $MODEL_PATH"
+else
+  MODEL_PATH="$MODEL_PATH_RAW"
+fi
 
 echo "=== 部署 qwen25-7b-instruct（sglang）==="
 echo "  镜像:        $SGLANG_IMAGE"
@@ -146,7 +154,7 @@ echo ""
 echo "=== 等待 pod 调度 ==="
 kubectl rollout status deployment/${MODEL_NAME} -n ${NAMESPACE} --timeout=30s 2>/dev/null || true
 
-POD=$(kubectl get pod -n ${NAMESPACE} -l app=${MODEL_NAME} --no-headers 2>/dev/null | head -1 | awk '{print $1}')
+POD=$(kubectl get pod -n ${NAMESPACE} -l "llm-d.ai/model=${MODEL_NAME}" --no-headers 2>/dev/null | head -1 | awk '{print $1}')
 echo ""
 echo "=== 部署完成 ==="
 echo "  sglang 启动约需 3-5 分钟（qwen25-7b 比 GLM 快很多）"
