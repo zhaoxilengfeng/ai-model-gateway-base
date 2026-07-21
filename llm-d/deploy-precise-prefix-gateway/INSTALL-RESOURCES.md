@@ -23,6 +23,7 @@
 
 > **InferenceModel** 是 GIE 的 alpha 资源（`inference.networking.k8s.io/v1alpha2`），当前官方文档尚无独立页面。
 > 其用途（请求优先级 / model alias）见 `inference-model/` 目录下的脚本注释，以及 [GIE GitHub 源码](https://github.com/kubernetes-sigs/gateway-api-inference-extension/blob/main/config/crd/experimental/bases/inference.networking.k8s.io_inferencemodels.yaml)。
+> llm-d 实际使用的流量分割资源是 `InferenceModelRewrite`，详见 [INFERENCE-MODEL-GUIDE.md](./INFERENCE-MODEL-GUIDE.md)。
 
 ---
 
