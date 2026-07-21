@@ -1,7 +1,7 @@
 #!/bin/bash
 # install-pool.sh — 为一个模型创建完整的推理池
 #
-# 每个推理池包含：render service + Gateway + EPP + HTTPRoute + InferencePool
+# 每个推理池包含：render service + AgentgatewayParameters + Gateway + EPP + HTTPRoute + InferencePool
 # 可重复调用，每次为一个不同的模型新增独立的推理池
 #
 # 用法：
@@ -12,6 +12,7 @@
 #     --served-model my-model \
 #     --render-model-path /path/to/model \
 #     --model-cache /root/models \
+#     --gateway-node-port 31820 \
 #     --namespace llm-d-my-ns
 
 set -euo pipefail
@@ -25,17 +26,19 @@ SERVED_MODEL=""
 RENDER_MODEL_PATH=""
 MODEL_CACHE="/root/models"
 NAMESPACE="llm-d-precise-prefix-gw"
+GATEWAY_NODE_PORT=""
 DEPLOY_DIR="${DEPLOY_DIR:-/root/deploy/llm-d-precise-prefix-gateway}"
 REPO_ROOT="${REPO_ROOT:-/root/llm-d}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --pool)           POOL="$2";               shift 2 ;;
-    --guide-name)     GUIDE_NAME="$2";          shift 2 ;;
-    --served-model)   SERVED_MODEL="$2";        shift 2 ;;
-    --render-model-path) RENDER_MODEL_PATH="$2"; shift 2 ;;
-    --model-cache)    MODEL_CACHE="$2";         shift 2 ;;
-    --namespace)      NAMESPACE="$2";           shift 2 ;;
+    --pool)              POOL="$2";               shift 2 ;;
+    --guide-name)        GUIDE_NAME="$2";          shift 2 ;;
+    --served-model)      SERVED_MODEL="$2";        shift 2 ;;
+    --render-model-path) RENDER_MODEL_PATH="$2";   shift 2 ;;
+    --model-cache)       MODEL_CACHE="$2";         shift 2 ;;
+    --gateway-node-port) GATEWAY_NODE_PORT="$2";   shift 2 ;;
+    --namespace)         NAMESPACE="$2";           shift 2 ;;
     *) shift ;;
   esac
 done
@@ -77,6 +80,7 @@ echo "  安装推理池: $GUIDE_NAME"
 echo "  模型名:     $SERVED_MODEL"
 echo "  Render路径: $RENDER_MODEL_PATH"
 echo "  Namespace:  $NAMESPACE"
+[[ -n "${GATEWAY_NODE_PORT}" ]] && echo "  Gateway端口: $GATEWAY_NODE_PORT" || echo "  Gateway端口: 随机分配"
 echo "=============================================="
 
 echo "=== 1. Deploy render (tokenizer) Service ==="
@@ -157,8 +161,40 @@ spec:
     protocol: TCP
 EOF
 
-echo "=== 2. Deploy Gateway ==="
+echo "=== 2. Deploy AgentgatewayParameters + Gateway ==="
+
+# 若指定了固定端口，先创建 AgentgatewayParameters 把 nodePort 写入 Service spec
+if [[ -n "${GATEWAY_NODE_PORT}" ]]; then
+  kubectl apply -n "${NAMESPACE}" -f - <<EOF
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayParameters
+metadata:
+  name: ${GUIDE_NAME}-params
+  namespace: ${NAMESPACE}
+spec:
+  service:
+    spec:
+      ports:
+      - name: http
+        port: 80
+        targetPort: 80
+        nodePort: ${GATEWAY_NODE_PORT}
+        protocol: TCP
+EOF
+  echo "  AgentgatewayParameters: nodePort=${GATEWAY_NODE_PORT}"
+fi
+
 # 每个池独立一个 Gateway（独立 NodePort，不互相干扰路由规则）
+# 若已创建 AgentgatewayParameters，通过 infrastructure.parametersRef 引用使端口固定
+INFRA_BLOCK=""
+if [[ -n "${GATEWAY_NODE_PORT}" ]]; then
+  INFRA_BLOCK="  infrastructure:
+    parametersRef:
+      group: agentgateway.dev
+      kind: AgentgatewayParameters
+      name: ${GUIDE_NAME}-params"
+fi
+
 kubectl apply -n "${NAMESPACE}" -f - <<EOF
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
@@ -167,6 +203,7 @@ metadata:
   namespace: ${NAMESPACE}
 spec:
   gatewayClassName: agentgateway
+${INFRA_BLOCK}
   listeners:
   - port: 80
     protocol: HTTP
