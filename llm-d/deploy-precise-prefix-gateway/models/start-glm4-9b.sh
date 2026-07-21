@@ -10,7 +10,7 @@
 
 set -e
 NAMESPACE="${NAMESPACE:-llm-d-precise-prefix-gw}"
-GUIDE_NAME="${GUIDE_NAME:-precise-prefix-cache-routing}"
+GUIDE_NAME="${GUIDE_NAME:-glm4-9b-pool}"
 VLLM_IMAGE="${VLLM_IMAGE:-vllm/vllm-openai:v0.23.0}"
 REPLICAS="${REPLICAS:-4}"
 MODEL_PATH="/home/data/model/glm-4-9b-chat"
