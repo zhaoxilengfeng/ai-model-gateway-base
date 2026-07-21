@@ -108,7 +108,7 @@ spec:
         imagePullPolicy: IfNotPresent
         command: ["vllm", "launch", "render"]
         args:
-        - "--model-path=${RENDER_MODEL_PATH}"
+        - "${RENDER_MODEL_PATH}"
         - "--port=8000"
         - "--served-model-name=${SERVED_MODEL}"
 $([ -n "${TRUST_REMOTE_CODE:-}" ] && printf '        - "%s"\n' "${TRUST_REMOTE_CODE}" || true)
