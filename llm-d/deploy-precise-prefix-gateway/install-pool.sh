@@ -111,7 +111,6 @@ spec:
         - "${RENDER_MODEL_PATH}"
         - "--port=8000"
         - "--served-model-name=${SERVED_MODEL}"
-        - "${TRUST_REMOTE_CODE:-}"
         ports:
         - name: render-http
           containerPort: 8000
