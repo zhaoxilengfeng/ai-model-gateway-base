@@ -12,7 +12,7 @@ set -e
 NAMESPACE="${NAMESPACE:-llm-d-precise-prefix-gw}"
 GUIDE_NAME="${GUIDE_NAME:-precise-prefix-cache-routing}"
 VLLM_IMAGE="${VLLM_IMAGE:-vllm/vllm-openai:v0.23.0}"
-REPLICAS="${REPLICAS:-2}"
+REPLICAS="${REPLICAS:-4}"
 MODEL_PATH="/home/data/model/glm-4-9b-chat"
 SERVED_MODEL="glm-4-9b"
 MODEL_NAME="glm-4-9b"
@@ -65,7 +65,7 @@ spec:
         - "--enable-prefix-caching"
         - "--block-size=64"
         - "--kv-events-config"
-        - '{"enable_kv_cache_events":true,"publisher":"zmq","endpoint":"tcp://*:5556","topic":"kv@$(POD_IP):8000@${SERVED_MODEL}"}'
+        - '{"enable_kv_cache_events":true,"publisher":"zmq","endpoint":"tcp://*:5556","topic":"kv@\$(POD_IP):8000@${SERVED_MODEL}"}'
         env:
         - name: HF_HUB_OFFLINE
           value: "1"
@@ -146,6 +146,6 @@ kubectl rollout status deployment/${MODEL_NAME} -n ${NAMESPACE} --timeout=30s 2>
 echo ""
 echo "=== 部署完成，GLM-4-9B 加载约 2-3 分钟 ==="
 echo "测试命令:"
-echo "  curl http://116.198.67.18:31273/v1/chat/completions \\"
+echo "  curl http://116.198.67.18:31161/v1/chat/completions \\"
 echo "    -H 'Content-Type: application/json' \\"
 echo "    -d '{\"model\":\"glm-4-9b\",\"messages\":[{\"role\":\"user\",\"content\":\"你好\"}],\"max_tokens\":50}'"

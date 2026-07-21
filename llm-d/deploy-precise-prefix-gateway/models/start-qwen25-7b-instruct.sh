@@ -7,13 +7,13 @@
 set -e
 DEPLOY_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
-export REPLICAS="${REPLICAS:-8}"
+export REPLICAS="${REPLICAS:-4}"
 
 bash "${DEPLOY_DIR}/deploy-model.sh" qwen25-7b-instruct \
   /root/models/hub/models--Qwen--Qwen2.5-7B-Instruct
 
 echo ""
 echo "=== 测试命令 ==="
-echo "  curl http://116.198.67.18:31273/v1/chat/completions \\"
+echo "  curl http://116.198.67.18:31820/v1/chat/completions \\"
 echo "    -H 'Content-Type: application/json' \\"
 echo "    -d '{\"model\":\"qwen25-7b-instruct\",\"messages\":[{\"role\":\"user\",\"content\":\"你好\"}],\"max_tokens\":100}'"
