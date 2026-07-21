@@ -2,6 +2,28 @@
 
 `install.sh` 是一次性全局基础设施安装脚本，完成后通过 `install-pool.sh` 为每个模型创建独立的推理池。
 
+## 参考文档
+
+| 组件 | 文档链接 |
+|------|---------|
+| GIE（Gateway API Inference Extension）概览 | [gateway-api-inference-extension.sigs.k8s.io](https://gateway-api-inference-extension.sigs.k8s.io/) |
+| GIE API 概念（InferencePool 介绍） | [concepts/api-overview](https://gateway-api-inference-extension.sigs.k8s.io/concepts/api-overview/) |
+| InferencePool API 类型 | [api-types/inferencepool](https://gateway-api-inference-extension.sigs.k8s.io/api-types/inferencepool/) |
+| GIE v1 API 参考 | [reference/spec](https://gateway-api-inference-extension.sigs.k8s.io/reference/spec/) |
+| GIE GitHub Releases | [releases](https://github.com/kubernetes-sigs/gateway-api-inference-extension/releases) |
+| Agentgateway 概览 | [about/overview](https://agentgateway.dev/docs/kubernetes/latest/about/overview.md) |
+| Agentgateway Helm 安装 | [install/helm](https://agentgateway.dev/docs/kubernetes/latest/install/helm.md) |
+| Agentgateway 高级安装选项 | [install/advanced](https://agentgateway.dev/docs/kubernetes/latest/install/advanced.md) |
+| AgentgatewayParameters API 参考 | [reference/api-kubespec/parameters](https://agentgateway.dev/docs/kubernetes/latest/reference/api-kubespec/parameters.md) |
+| AgentgatewayBackend API 参考 | [reference/api-kubespec/backends](https://agentgateway.dev/docs/kubernetes/latest/reference/api-kubespec/backends.md) |
+| AgentgatewayPolicy API 参考 | [reference/api-kubespec/policies](https://agentgateway.dev/docs/kubernetes/latest/reference/api-kubespec/policies.md) |
+| Agentgateway 多推理池配置 | [llm/multiple-inference-pools](https://agentgateway.dev/docs/kubernetes/latest/llm/multiple-inference-pools.md) |
+| Agentgateway vLLM 集成 | [integrations/vllm](https://agentgateway.dev/docs/kubernetes/latest/integrations/vllm.md) |
+| Agentgateway GitHub | [github.com/agentgateway/agentgateway](https://github.com/agentgateway/agentgateway) |
+
+> **InferenceModel** 是 GIE 的 alpha 资源（`inference.networking.k8s.io/v1alpha2`），当前官方文档尚无独立页面。
+> 其用途（请求优先级 / model alias）见 `inference-model/` 目录下的脚本注释，以及 [GIE GitHub 源码](https://github.com/kubernetes-sigs/gateway-api-inference-extension/blob/main/config/crd/experimental/bases/inference.networking.k8s.io_inferencemodels.yaml)。
+
 ---
 
 ## 步骤总览
@@ -18,13 +40,13 @@
 
 ## 步骤 1 — Install GIE CRDs
 
-**来源文件：** `$DEPLOY_DIR/gie-v1.5.0.yaml`（GIE v1.5.0）
+**来源文件：** `$DEPLOY_DIR/gie-v1.5.0.yaml`（[GIE v1.5.0](https://github.com/kubernetes-sigs/gateway-api-inference-extension/releases/tag/v1.5.0)）
 
 安装以下 CustomResourceDefinition：
 
 | CRD 名称 | Kind | API Group | 用途 |
 |----------|------|-----------|------|
-| `inferencepools.inference.networking.k8s.io` | `InferencePool` | `inference.networking.k8s.io` | 定义一组提供同一模型的推理后端 pod 集合，供 EPP（Endpoint Picker）调度 |
+| `inferencepools.inference.networking.k8s.io` | [`InferencePool`](https://gateway-api-inference-extension.sigs.k8s.io/api-types/inferencepool/) | `inference.networking.k8s.io` | 定义一组提供同一模型的推理后端 pod 集合，供 EPP（Endpoint Picker）调度 |
 
 > `InferencePool` 是 llm-d 路由体系的核心资源，EPP 根据它发现可调度的模型 pod。
 
@@ -32,15 +54,15 @@
 
 ## 步骤 2 — Install Agentgateway CRDs
 
-**来源目录：** `$DEPLOY_DIR/agentgateway-crds/`（agentgateway v1.3.1）
+**来源目录：** `$DEPLOY_DIR/agentgateway-crds/`（[agentgateway v1.3.1](https://github.com/agentgateway/agentgateway/releases/tag/v1.3.1)）
 
 安装以下 3 个 CustomResourceDefinition：
 
 | CRD 名称 | Kind | API Group | 用途 |
 |----------|------|-----------|------|
-| `agentgatewaybackends.agentgateway.dev` | `AgentgatewayBackend` | `agentgateway.dev` | 定义 agentgateway 后端目标（推理服务的上游地址） |
-| `agentgatewayparameters.agentgateway.dev` | `AgentgatewayParameters` | `agentgateway.dev` | 为 GatewayClass 提供 agentgateway 特定参数（如镜像、功能开关） |
-| `agentgatewaypolicies.agentgateway.dev` | `AgentgatewayPolicy` | `agentgateway.dev` | 附加到 Gateway/Route 的策略（流量控制、超时、重试等） |
+| `agentgatewaybackends.agentgateway.dev` | [`AgentgatewayBackend`](https://agentgateway.dev/docs/kubernetes/latest/reference/api-kubespec/backends.md) | `agentgateway.dev` | 定义 agentgateway 后端目标（推理服务的上游地址） |
+| `agentgatewayparameters.agentgateway.dev` | [`AgentgatewayParameters`](https://agentgateway.dev/docs/kubernetes/latest/reference/api-kubespec/parameters.md) | `agentgateway.dev` | 为 GatewayClass 提供 agentgateway 特定参数（如镜像、功能开关） |
+| `agentgatewaypolicies.agentgateway.dev` | [`AgentgatewayPolicy`](https://agentgateway.dev/docs/kubernetes/latest/reference/api-kubespec/policies.md) | `agentgateway.dev` | 附加到 Gateway/Route 的策略（流量控制、超时、重试等） |
 
 ---
 
@@ -48,7 +70,7 @@
 
 **Helm release 名称：** `agentgateway`
 **安装 namespace：** `agentgateway-system`（自动创建）
-**Chart 版本：** v1.3.1（`appVersion: v1.3.1`）
+**Chart 版本：** v1.3.1（参见 [Helm 安装文档](https://agentgateway.dev/docs/kubernetes/latest/install/helm.md) / [高级选项](https://agentgateway.dev/docs/kubernetes/latest/install/advanced.md)）
 **启用选项：** `inferenceExtension.enabled=true`
 
 Helm 在 `agentgateway-system` namespace 中创建以下资源：
