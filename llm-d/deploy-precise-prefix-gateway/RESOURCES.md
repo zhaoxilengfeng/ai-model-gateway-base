@@ -442,3 +442,28 @@ rules:
 > 需要客户端在 header 里额外携带 `x-model-name`，或通过不同路径（`/v1/qwen/` vs `/v1/glm/`）区分。
 > 后续版本可能支持按 request body 中的 `model` 字段直接路由。
 
+
+
+---
+
+## 多模型路由配置（单入口）
+
+详细配置指南见 [MULTI-MODEL-ROUTING.md](MULTI-MODEL-ROUTING.md)。
+
+### 核心机制
+
+agentgateway v1.3.1 原生支持按请求体  字段路由（无需客户端改动）：
+
+1. （PreRouting）：CEL 读取  字段，写入内部 header
+2. ：按 header 路由到对应 InferencePool
+
+### 当前配置文件
+
+- ：模型名 → header 映射
+- ：header → InferencePool 路由
+
+### 关键约束
+
+每个 InferencePool 必须使用**独立的**  label，
+否则多个池会选中彼此的 pod 导致路由混乱。
+Deployment 的 selector 是 immutable，修改 guide label 需要**删除重建**。
