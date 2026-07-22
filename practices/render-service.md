@@ -234,3 +234,10 @@ DataProducer "token-producer" failed: ... connection refused
 ### render 副本数建议
 
 官方指南建议 3 副本（与 EPP 副本数解耦，独立扩容）。tokenize 属于 CPU 轻量操作，单副本吞吐约 200-500 req/s，3 副本足以覆盖大多数场景。多模型部署时每个模型的 render service 各自独立扩容。
+
+---
+
+## 参考资料
+
+- [vllm launch render — vLLM 官方文档](https://docs.vllm.ai/en/latest/cli/launch/render/)
+- [Master KV cache aware routing with llm-d — Red Hat Developer](https://developers.redhat.com/articles/2025/10/07/master-kv-cache-aware-routing-llm-d-efficient-ai-inference)
